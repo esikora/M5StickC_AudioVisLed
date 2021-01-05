@@ -9,8 +9,6 @@
 
 #include <arduinoFFT.h>
 
-//#include <fix_fft.h>
-
 /* ----- General constants ----- */
 
 const uint16_t kSampleRate = 44100; // Unit: Hz
@@ -42,14 +40,6 @@ fftData_t fftDataImag_[kFFT_SampleCount] = {0.0};
 fftData_t magnitudeSpectrumAvg_[kFFT_FreqBinCount] = {0};
 
 ArduinoFFT<fftData_t> fft_ = ArduinoFFT<fftData_t>(fftDataReal_, fftDataImag_, kFFT_SampleCount, kFFT_SamplingFreq); // Create FFT object
-
-/*
-int16_t fftDataReal_[kFFT_SampleCount] = {0};
-
-int16_t fftDataImag_[kFFT_SampleCount] = {0};
-
-uint16_t magnitudeSpectrumAvg_[kFFT_FreqBinCount] = {0};
-*/
 
 /* ----- i2s hardware constants ----- */
 
@@ -88,10 +78,15 @@ bool setupI2Smic()
 {
     esp_err_t i2sErr;
 
-    // Configure i2s for sampling 16 bit mono audio data
+    // i2s configuration for sampling 16 bit mono audio data
     //
-    // Notes:
-    // - dma_buf_len : Number of samples in each DMA buffer, limited to 1024. dma_buf_len * 'bytes_per_sample' is limted to 4092.
+    // Notes related to i2s.c:
+    // - 'dma_buf_len', i.e. the number of samples in each DMA buffer, is limited to 1024
+    // - 'dma_buf_len' * 'bytes_per_sample' is limted to 4092
+    // - 'I2S_CHANNEL_FMT_ONLY_RIGHT' means "mono", i.e. only one channel to be received via i2s
+    //   In the M5StickC microphone example 'I2S_CHANNEL_FMT_ALL_RIGHT' is used which means two channels.
+    //   Afterwards, i2s_set_clk is called to change the DMA configuration to just one channel.
+    //
     i2s_config_t i2sConfig = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
         .sample_rate = kSampleRate,
@@ -135,117 +130,6 @@ bool setupI2Smic()
 
     return true;
 }
-
-// -----------------------------------------------
-// FactoryTest.ino
-
-/*
-void MicRecordfft(void *arg)
-{
-    int16_t *buffptr;
-    size_t bytesread;
-    uint16_t count_n = 0;
-    float adc_data;
-    double data = 0;
-    uint16_t ydata;
-
-    while (1)
-    {
-        xSemaphoreTake(start_fft, portMAX_DELAY);
-        xSemaphoreGive(start_fft);
-
-        fft_config_t *real_fft_plan = fft_init(512, FFT_REAL, FFT_FORWARD, NULL, NULL);
-        i2s_read(I2S_NUM_0, (char *)i2s_readraw_buff, 1024, &bytesread, (100 / portTICK_RATE_MS));
-        buffptr = (int16_t *)i2s_readraw_buff;
-
-        for (count_n = 0; count_n < real_fft_plan->size; count_n++)
-        {
-            adc_data = (float)map(buffptr[count_n], INT16_MIN, INT16_MAX, -1000, 1000);
-            real_fft_plan->input[count_n] = adc_data;
-        }
-        fft_execute(real_fft_plan);
-
-        xSemaphoreTake(xSemaphore, 100 / portTICK_RATE_MS);
-        for (count_n = 1; count_n < real_fft_plan->size / 4; count_n++)
-        {
-            data = sqrt(real_fft_plan->output[2 * count_n] * real_fft_plan->output[2 * count_n] + real_fft_plan->output[2 * count_n + 1] * real_fft_plan->output[2 * count_n + 1]);
-            if ((count_n - 1) < 80)
-            {
-                ydata = map(data, 0, 2000, 0, 256);
-                fft_dis_buff[posData][80 - count_n] = ydata;
-            }
-        }
-        posData++;
-        if (posData >= 161)
-        {
-            posData = 0;
-        }
-        xSemaphoreGive(xSemaphore);
-        fft_destroy(real_fft_plan);
-    }
-}
-
-
-void mic_record_task (void* arg)
-{   
-    size_t bytesread;
-
-    while(1)
-    {
-        i2s_read(kI2S_Port, (char*) micReadBuffer_, kFF, &bytesread, (100 / portTICK_RATE_MS));
-        adcBuffer = (int16_t *)BUFFER;
-        showSignal();
-        vTaskDelay(100 / portTICK_RATE_MS);
-    }
-}
-
-void showSignal(){
-    int y;
-    for (int n = 0; n < 160; n++){
-    y = adcBuffer[n] * GAIN_FACTOR;
-    y = map(y, INT16_MIN, INT16_MAX, 10, 70);
-    M5.Lcd.drawPixel(n, oldy[n],WHITE);
-    M5.Lcd.drawPixel(n,y,BLACK);
-    oldy[n] = y;
-    }
-}
-*/
-
-/**
- * Computes the integer square root of n.
- * 
- * Based on: https://en.wikipedia.org/wiki/Integer_square_root
- */
-uint16_t intSqrt(uint32_t n)
-{
-     if (n < 2)
-        return n;
-
-    int8_t shift = 2;
-
-    while ((n >> shift) != 0)
-        shift += 2;
-
-    uint16_t result = 0;
-
-    while (shift >= 0)
-    {
-        result = result << 1;
-
-        uint16_t largeCand = result + 1;
-
-        uint32_t largeCandSq = largeCand;
-        largeCandSq *= largeCand;
-
-        if ( largeCandSq <= (n >> shift) )
-            result = largeCand;
-
-        shift -= 2;
-    }
-
-    return result;
-}
-
 
 void setup() {
     M5.begin();
@@ -402,11 +286,6 @@ void loop() {
 
         fftDataReal_[i] = (fftData_t) v;
         fftDataImag_[i] = 0.0f;
-
-        /*
-        fftDataReal_[i] = v;
-        fftDataImag_[i] = 0;
-        */
     }
 
     /*
@@ -436,47 +315,19 @@ void loop() {
     //fft_.windowing(FFTWindow::Hamming, FFTDirection::Forward);
     fft_.compute(FFTDirection::Forward);
     
-    /*
-    // Compute forward FFT. Return value "scale" is 0 for the forward FFT.
-    fix_fft(fftDataReal_, fftDataImag_, kFFT_SampleCountLog2, 0); // @FIXME: Replace "0 = forward" by enum value
-    */
-
     // Compute magnitude value for each frequency bin, i.e. only first half of the FFT results
     for (uint16_t i = 0; i < kFFT_FreqBinCount; i++)
     {
         float magValNew = sqrtf( fftDataReal_[i] * fftDataReal_[i] + fftDataImag_[i] * fftDataImag_[i] );
-
+        
+        // Update the averaged spectrum using the current values
         const float w1 = 9.0f/128.0f;
         const float w2 = 1 - w1;
 
         magnitudeSpectrumAvg_[i] = magValNew * w1 + magnitudeSpectrumAvg_[i] * w2;
-
-        /*
-        int32_t realSq = fftDataReal_[i];
-        realSq *= fftDataReal_[i];
-
-        int32_t imagSq = fftDataImag_[i];
-        imagSq *= fftDataImag_[i];
-
-        uint32_t sumSq = realSq + imagSq;
-
-        uint32_t magValNew = intSqrt(sumSq);
-        
-        uint32_t magValOldAvg = magnitudeSpectrumAvg_[i];
-        uint32_t magValNewAvg = (magValNew * 9 + magValOldAvg * 119) / 128;
-
-        if ( magValNewAvg <= UINT16_MAX )
-        {
-            magnitudeSpectrumAvg_[i] = (uint16_t) magValNewAvg;
-        }
-        else {
-            magnitudeSpectrumAvg_[i] = UINT16_MAX;
-
-            log_d("Magnitude value larger than UINT16_MAX: %d", magValNewAvg);
-        }
-        */
     }
 
+    // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
 
     if (userTrigger_ == 0)
@@ -496,10 +347,6 @@ void loop() {
         {
             for (uint16_t i = 0; i < kFFT_FreqBinCount; i++)
             {
-                /*
-                Serial.printf("%.1f Hz: %d\n", kFFT_FreqStep * i, magnitudeSpectrumAvg_[i]);
-                */
-
                Serial.printf("%.1f Hz: %.2f\n", kFFT_FreqStep * i, magnitudeSpectrumAvg_[i]);
             }
         }
