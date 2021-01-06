@@ -17,15 +17,13 @@ const uint16_t kSampleRate = 44100; // Unit: Hz
 
 typedef float fftData_t;
 
-const uint8_t kFFT_SampleCountLog2 = 12;
+const uint8_t kFFT_SampleCountLog2 = 11;
 
 const uint16_t kFFT_SampleCount = 1 << kFFT_SampleCountLog2;
 
+const fftData_t kFFT_SampleCountInv = 1.0f / kFFT_SampleCount;
+
 const fftData_t kFFT_SamplingFreq = (fftData_t) kSampleRate;
-
-const fftData_t kFFT_SampleCountInv = 1.0 / kFFT_SampleCount;
-
-const fftData_t kFFT_SampleTime = (fftData_t) kFFT_SampleCount / kSampleRate;
 
 const uint16_t kFFT_FreqBinCount = kFFT_SampleCount / 2;
 
@@ -131,6 +129,103 @@ bool setupI2Smic()
     return true;
 }
 
+// Frequency bands
+// Source: https://www.teachmeaudio.com/mixing/techniques/audio-spectrum
+//
+// Sub-bass:       20-60 Hz
+// Bass:           60-250 Hz
+// Low midrange:   250-500 Hz
+// Midrange:       500-2000 Hz
+// Upper midrange: 2000-4000 Hz
+// Presence:       4000-6000 Hz
+// Brilliance:     6000-20000 Hz
+
+const uint8_t kFreqBandCount = 7;
+
+const float kFreqBandStartHz = 20;
+const float kFreqBandEndHz[kFreqBandCount] = {60, 250, 500, 2000, 4000, 6000, 20000};
+
+/* Start indices, end indices and normalization factors for each frequency band
+    The indices relate to the frequency bins resulting from the FFT */
+uint16_t freqBandBinIdxStart_[kFreqBandCount] = { 0 };
+uint16_t freqBandBinIdxEnd_[kFreqBandCount] = { 0 };
+float freqBandNormFactor_[kFreqBandCount] = { 0.0f };
+
+bool setupSpectrumAnalysis()
+{
+    bool success = true;
+
+    // Variables for bin indices and bin count belonging to the current frequency band
+    uint16_t binIdxStart; // Index of the first frequency bin of the current frequency band
+    uint16_t binIdxEnd;   // Index of the last frequency bin of the current frequency band
+    int16_t binCount;     // Number of frequency bins within the current frequency band
+    
+    // Set bin index for the start of the first frequency band
+    binIdxStart = ceilf( kFreqBandStartHz / kFFT_FreqStep);
+
+    // Compute values for all frequency bands
+    for (uint8_t bandIdx = 0; bandIdx < kFreqBandCount; bandIdx++)
+    {
+        // Store index of first frequency bin of current band
+        if ( binIdxStart < kFFT_FreqBinCount )
+        {
+            freqBandBinIdxStart_[bandIdx] = binIdxStart;
+        }
+        else
+        {
+            freqBandBinIdxStart_[bandIdx] = 0;
+            
+            success = false;
+
+            log_e("Failed to set start bin index for frequency band no. %d", bandIdx);
+        }
+        
+        // Compute index of last frequency bin of current band
+        binIdxEnd = ceilf( kFreqBandEndHz[bandIdx] / kFFT_FreqStep ) - 1;
+        
+        if ( binIdxEnd < kFFT_FreqBinCount)
+        {
+            freqBandBinIdxEnd_[bandIdx] = binIdxEnd;
+        }
+        else
+        {
+            freqBandBinIdxEnd_[bandIdx] = 0;
+            binIdxEnd = kFFT_FreqBinCount - 1;
+
+            success = false;
+
+            log_e("Failed to set end bin index for frequency band no. %d", bandIdx);
+        }
+
+        // Compute normalization factor for current band
+        binCount = binIdxEnd - binIdxStart + 1;
+
+        if (binCount > 0)
+        {
+            freqBandNormFactor_[bandIdx] = 1.0f / binCount;
+        }
+        else
+        {
+            freqBandNormFactor_[bandIdx] = 0.0f;
+
+            success = false;
+
+            log_e("Failed to normalization factor for frequency band no. %d", bandIdx);
+        }
+
+        // Set binIdxStart for next band
+        binIdxStart = binIdxEnd + 1;
+
+        log_d("Bins in band %d: %d to %d. Number of bins: %d. Normalization factor: %.3f",
+            bandIdx,
+            freqBandBinIdxStart_[bandIdx], freqBandBinIdxEnd_[bandIdx],
+            binCount,
+            freqBandNormFactor_[bandIdx]);
+    }
+
+    return success;
+}
+
 void setup() {
     M5.begin();
     M5.Lcd.setRotation(3);
@@ -142,6 +237,8 @@ void setup() {
 
     setupI2Smic();
 
+    setupSpectrumAnalysis();
+
     log_d("Setup successfully completed.");
 
     log_d("portTICK_PERIOD_MS: %d", portTICK_PERIOD_MS);
@@ -150,18 +247,18 @@ void setup() {
 }
 
 
-uint16_t slotNr = 0;
+uint16_t slotNr_ = 0;
 const uint16_t kSlotCount = 21;
 
-int16_t accumMin = INT16_MAX;
-int16_t accumMax = INT16_MIN;
+int16_t accumMin_ = INT16_MAX;
+int16_t accumMax_ = INT16_MIN;
 
-int32_t accumAvgSum = 0;
-int16_t accumAvgCount = 0;
+int32_t accumAvgSum_ = 0;
+int16_t accumAvgCount_ = 0;
 
-unsigned long timeReadLastMicros = 0;
+unsigned long timeReadLastMicros_ = 0;
 
-unsigned long timeCompMaxMicros = 0;
+unsigned long timeCompMaxMicros_ = 0;
 
 /*
 const uint16_t kRecChunkCount = 22;
@@ -174,6 +271,10 @@ bool recActive_ = false;
 */
 
 uint8_t userTrigger_ = 0;
+
+/*
+uint16_t testSignalFreqFactor_ = 0;
+*/
 
 void loop() {
 
@@ -192,10 +293,10 @@ void loop() {
     unsigned long timeInRead = timeAferReadMicros - timeBeforeReadMicros;
 
     // Compute duration since last read
-    unsigned long timeBetweenRead = timeAferReadMicros - timeReadLastMicros;
+    unsigned long timeBetweenRead = timeAferReadMicros - timeReadLastMicros_;
 
     // Store timestamp for next computation
-    timeReadLastMicros = timeAferReadMicros;
+    timeReadLastMicros_ = timeAferReadMicros;
 
     if (i2sErr)
     {
@@ -252,7 +353,7 @@ void loop() {
         }
     }
 
-    log_d("Read duration [µs]: %d. Duration since last read [µs]: %d", timeInRead, timeBetweenRead);
+    log_v("Read duration [µs]: %d. Duration since last read [µs]: %d", timeInRead, timeBetweenRead);
 
     // Store start time of loop() to compute duration later on
     unsigned long timeStartMicros = micros();
@@ -273,18 +374,51 @@ void loop() {
     int16_t blockAvg = blockSum / kFFT_SampleCount;
 
     // Compute accumulated values
-    accumAvgSum += blockAvg;
-    accumAvgCount += 1;
-    accumMin = min(accumMin, blockMin);
-    accumMax = max(accumMax, blockMax);
+    accumAvgSum_ += blockAvg;
+    accumAvgCount_ += 1;
+    accumMin_ = min(accumMin_, blockMin);
+    accumMax_ = max(accumMax_, blockMax);
+
+    /*
+    // Increment factor for test signal frequency
+    if ( slotNr_ == 0 )
+    {
+        testSignalFreqFactor_ += 1;
+
+        if ( testSignalFreqFactor_ > kFFT_FreqBinCount )
+        {
+            testSignalFreqFactor_ = 1;
+        }
+    }
+    */
 
     // Initialize fft input data
     for (uint16_t i = 0; i < kFFT_SampleCount; i++)
     {
-        // Subtract the block average from each sample in order remove the DC component
+        // Corrected input value: Subtract the block average from each sample in order remove the DC component
         int16_t v = micReadBuffer_[i] - blockAvg;
 
-        fftDataReal_[i] = (fftData_t) v;
+        // Constant for normalizing int16 input values to floating point range -1.0 to 1.0
+        const fftData_t kInt16MaxInv = 1.0f / __INT16_MAX__;
+
+        // Input value in floating point representation
+        fftData_t r;
+
+        /*
+        // Compute input value for FFT
+        r = kInt16MaxInv * v;
+        */
+
+        /*
+        // Generate test signal
+        const float k2Pi = 6.2831853f;
+        const float k2PiSampleCountInv = k2Pi * kFFT_SampleCountInv;
+        
+        r = sinf( k2PiSampleCountInv * (testSignalFreqFactor_ * i) );
+        */
+        
+        // Store value in FFT input array
+        fftDataReal_[i] = r;
         fftDataImag_[i] = 0.0f;
     }
 
@@ -327,6 +461,20 @@ void loop() {
         magnitudeSpectrumAvg_[i] = magValNew * w1 + magnitudeSpectrumAvg_[i] * w2;
     }
 
+    // Compute average magnitude for each frequency band
+    float magnitudeBandAvg[kFreqBandCount] = { 0.0f };
+
+    for (uint8_t bandIdx = 0; bandIdx < kFreqBandCount; bandIdx++)
+    {
+
+        for (uint16_t binIdx = freqBandBinIdxStart_[bandIdx]; binIdx <= freqBandBinIdxEnd_[bandIdx]; binIdx++)
+        {
+            magnitudeBandAvg[bandIdx] += magnitudeSpectrumAvg_[binIdx];
+        }
+
+        magnitudeBandAvg[bandIdx] *= freqBandNormFactor_[bandIdx];
+    }
+
     // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
 
@@ -345,34 +493,53 @@ void loop() {
     else {
         if (userTrigger_ == 1)
         {
+            /*
             for (uint16_t i = 0; i < kFFT_FreqBinCount; i++)
             {
-               Serial.printf("%.1f Hz: %.2f\n", kFFT_FreqStep * i, magnitudeSpectrumAvg_[i]);
+                Serial.printf("%.1f Hz: %.2f\n", kFFT_FreqStep * i, magnitudeSpectrumAvg_[i]);
+            }
+            */
+
+            for (uint8_t i = 0; i < kFreqBandCount; i++)
+            {
+                Serial.printf("to %.0f Hz: %.2f\n", kFreqBandEndHz[i], magnitudeBandAvg[i]);
             }
         }
         userTrigger_ -= 1;
     }
 
-    // Compute duration of loop
+    // Compute duration of processing
     unsigned long timeEndMicros = micros();
     unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
 
-    if (timeDeltaMicros > timeCompMaxMicros)
+    log_d("1: %06.2f  2: %06.2f  3: %06.2f  4: %06.2f  5: %06.2f  6: %06.2f  7: %06.2f  t: %d",
+        magnitudeBandAvg[0],
+        magnitudeBandAvg[1],
+        magnitudeBandAvg[2],
+        magnitudeBandAvg[3],
+        magnitudeBandAvg[4],
+        magnitudeBandAvg[5],
+        magnitudeBandAvg[6],
+        timeDeltaMicros);
+
+    if (timeDeltaMicros > timeCompMaxMicros_)
     {
-        timeCompMaxMicros = timeDeltaMicros;
+        timeCompMaxMicros_ = timeDeltaMicros;
     }
 
-    slotNr = (slotNr + 1) % kSlotCount;
+    slotNr_ = (slotNr_ + 1) % kSlotCount;
 
-    if (slotNr == 0)
+    if (slotNr_ == 0)
     {
         //M5.Lcd.setCursor(0, 10, 4);
         //M5.Lcd.printf("%08.1f", 0.0);
 
-        log_d("Min sample value: %d", accumMin);
-        log_d("Max sample value: %d", accumMax);
-        log_d("Average value: %d", accumAvgSum / accumAvgCount);
-        log_d("Maximum duration of processing: %d microseconds.", timeCompMaxMicros);
+        /*
+        log_d("Min sample value: %d", accumMin_);
+        log_d("Max sample value: %d", accumMax_);
+        log_d("Average value: %d", accumAvgSum_ / accumAvgCount_);
+        log_d("Maximum duration of processing: %d microseconds.", timeCompMaxMicros_);
+        */
 
         /*
         for (uint16_t i = 0; i < kFFT_SampleCount; i+=8)
@@ -388,12 +555,12 @@ void loop() {
         }
         */
 
-        accumAvgSum = 0;
-        accumAvgCount = 0;
+        accumAvgSum_ = 0;
+        accumAvgCount_ = 0;
 
-        accumMin = INT16_MAX;
-        accumMax = INT16_MIN;
+        accumMin_ = INT16_MAX;
+        accumMax_ = INT16_MIN;
         
-        timeCompMaxMicros = 0;
+        timeCompMaxMicros_ = 0;
     }
 }
