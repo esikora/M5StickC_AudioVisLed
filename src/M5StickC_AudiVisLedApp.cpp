@@ -5,7 +5,7 @@
 
 #include <math.h>
 
-//#include <FastLED.h>
+#include <FastLED.h>
 
 #include <arduinoFFT.h>
 
@@ -70,6 +70,19 @@ const int kI2S_QueueLength = 16;
 int16_t micReadBuffer_[kFFT_SampleCount] = {0};
 
 QueueHandle_t pI2S_Queue_ = nullptr;
+
+/* ----- Fastled constants ----- */
+
+const uint8_t kPinLedStrip = 32; // M5StickC grove port, yellow cable
+
+const uint8_t kNumLeds = 29;
+
+const uint8_t kLedStripBrightness = 50;
+
+/* ----- Fastled variables ----- */
+
+// LED strip controller
+CRGB ledStrip_[kNumLeds];
 
 
 bool setupI2Smic()
@@ -226,6 +239,15 @@ bool setupSpectrumAnalysis()
     return success;
 }
 
+void setupLedStrip()
+{
+    FastLED.addLeds<NEOPIXEL, kPinLedStrip>(ledStrip_, kNumLeds);
+    FastLED.clear();
+    FastLED.setBrightness(kLedStripBrightness);
+    ledStrip_[0].setHSV(60, 255, 255);
+    FastLED.show();
+}
+
 void setup() {
     M5.begin();
     M5.Lcd.setRotation(3);
@@ -238,6 +260,8 @@ void setup() {
     setupI2Smic();
 
     setupSpectrumAnalysis();
+
+    setupLedStrip();
 
     log_d("Setup successfully completed.");
 
@@ -271,6 +295,10 @@ bool recActive_ = false;
 */
 
 uint8_t userTrigger_ = 0;
+
+float beatHist_[3] = {0.0f};
+
+uint8_t beatVisIntensity_ = 0;
 
 /*
 uint16_t testSignalFreqFactor_ = 0;
@@ -404,10 +432,8 @@ void loop() {
         // Input value in floating point representation
         fftData_t r;
 
-        /*
         // Compute input value for FFT
         r = kInt16MaxInv * v;
-        */
 
         /*
         // Generate test signal
@@ -455,7 +481,7 @@ void loop() {
         float magValNew = sqrtf( fftDataReal_[i] * fftDataReal_[i] + fftDataImag_[i] * fftDataImag_[i] );
         
         // Update the averaged spectrum using the current values
-        const float w1 = 9.0f/128.0f;
+        const float w1 = 16.0f/128.0f;
         const float w2 = 1 - w1;
 
         magnitudeSpectrumAvg_[i] = magValNew * w1 + magnitudeSpectrumAvg_[i] * w2;
@@ -474,6 +500,33 @@ void loop() {
 
         magnitudeBandAvg[bandIdx] *= freqBandNormFactor_[bandIdx];
     }
+
+    // Maintain history of last three magnitude values of the bass band
+    beatHist_[0] = beatHist_[1];
+    beatHist_[1] = beatHist_[2];
+    beatHist_[2] = magnitudeBandAvg[1];
+
+    float diff1 = beatHist_[1] - beatHist_[0];
+    float diff2 = beatHist_[2] - beatHist_[1];
+
+    bool beatDetected = false;
+
+    // Detect magnitude peak
+    if ( ((diff1 >= 0.01) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -0.01)) )
+    {
+        beatVisIntensity_ = 250;
+        beatDetected = true;
+    }
+    else {
+        if ( beatVisIntensity_ >= 25 )
+            beatVisIntensity_ -= 25;
+    }
+
+    ledStrip_[0].setHSV(0, 255, beatVisIntensity_);
+    FastLED.show();
+
+    if ( (diff1 > 0) && (diff2 < 0) )
+        Serial.printf("M: %7.4f; D1: %7.4f; D2: %7.4f; %d\n", beatHist_[1], diff1, diff2, beatDetected);
 
     // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
@@ -512,6 +565,7 @@ void loop() {
     unsigned long timeEndMicros = micros();
     unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
 
+    /*
     log_d("1: %06.2f  2: %06.2f  3: %06.2f  4: %06.2f  5: %06.2f  6: %06.2f  7: %06.2f  t: %d",
         magnitudeBandAvg[0],
         magnitudeBandAvg[1],
@@ -521,6 +575,7 @@ void loop() {
         magnitudeBandAvg[5],
         magnitudeBandAvg[6],
         timeDeltaMicros);
+    */
 
     if (timeDeltaMicros > timeCompMaxMicros_)
     {
