@@ -84,6 +84,40 @@ const uint8_t kLedStripBrightness = 50;
 // LED strip controller
 CRGB ledStrip_[kNumLeds];
 
+// Frequency bands
+// Source: https://www.teachmeaudio.com/mixing/techniques/audio-spectrum
+//
+// Sub-bass:       20-60 Hz
+// Bass:           60-250 Hz
+// Low midrange:   250-500 Hz
+// Midrange:       500-2000 Hz
+// Upper midrange: 2000-4000 Hz
+// Presence:       4000-6000 Hz
+// Brilliance:     6000-20000 Hz
+
+//const uint8_t kFreqBandCount = 7;
+//const float kFreqBandStartHz = 20;
+//const float kFreqBandEndHz[kFreqBandCount] = {60, 250, 500, 2000, 4000, 6000, 20000};
+
+const uint8_t kFreqBandCount = 20;
+
+const float kFreqBandStartHz = 40;
+
+// Index:                                         0      1      2      3      4       5      6     7     8     9    10    11    12    13    14    15    16    17    18      19
+const float kFreqBandEndHz[kFreqBandCount] = {   60,   125,   250,   375,   500,    750,  1000, 1250, 1500, 1750, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000,  20000};
+const float kFreqBandAmp[kFreqBandCount]   = { 0.3f,  0.1f, 0.07f,  0.3f,  0.3f,   0.6f,     1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,   0.3f};
+
+fftData_t sensitivityFactor_ = 1;
+const float kSensitivityFactorMax = 1000.0f;
+
+float magnitudeBandMax_[kFreqBandCount] = { 0.0f };
+
+/* Start indices, end indices and normalization factors for each frequency band
+    The indices relate to the frequency bins resulting from the FFT */
+uint16_t freqBandBinIdxStart_[kFreqBandCount] = { 0 };
+uint16_t freqBandBinIdxEnd_[kFreqBandCount] = { 0 };
+float freqBandNormFactor_[kFreqBandCount] = { 0.0f };
+
 
 bool setupI2Smic()
 {
@@ -141,28 +175,6 @@ bool setupI2Smic()
 
     return true;
 }
-
-// Frequency bands
-// Source: https://www.teachmeaudio.com/mixing/techniques/audio-spectrum
-//
-// Sub-bass:       20-60 Hz
-// Bass:           60-250 Hz
-// Low midrange:   250-500 Hz
-// Midrange:       500-2000 Hz
-// Upper midrange: 2000-4000 Hz
-// Presence:       4000-6000 Hz
-// Brilliance:     6000-20000 Hz
-
-const uint8_t kFreqBandCount = 7;
-
-const float kFreqBandStartHz = 20;
-const float kFreqBandEndHz[kFreqBandCount] = {60, 250, 500, 2000, 4000, 6000, 20000};
-
-/* Start indices, end indices and normalization factors for each frequency band
-    The indices relate to the frequency bins resulting from the FFT */
-uint16_t freqBandBinIdxStart_[kFreqBandCount] = { 0 };
-uint16_t freqBandBinIdxEnd_[kFreqBandCount] = { 0 };
-float freqBandNormFactor_[kFreqBandCount] = { 0.0f };
 
 bool setupSpectrumAnalysis()
 {
@@ -223,7 +235,7 @@ bool setupSpectrumAnalysis()
 
             success = false;
 
-            log_e("Failed to normalization factor for frequency band no. %d", bandIdx);
+            log_e("Failed to set normalization factor for frequency band no. %d", bandIdx);
         }
 
         // Set binIdxStart for next band
@@ -251,8 +263,8 @@ void setupLedStrip()
 void setup() {
     M5.begin();
     M5.Lcd.setRotation(3);
-    M5.Lcd.fillScreen(WHITE);
-    M5.Lcd.setTextColor(BLACK, WHITE);
+    M5.Lcd.fillScreen(BLACK);
+    M5.Lcd.setTextColor(WHITE, BLUE);
     M5.Lcd.println("Audio Vis");
 
     M5.Lcd.setTextSize(1);
@@ -475,58 +487,106 @@ void loop() {
     //fft_.windowing(FFTWindow::Hamming, FFTDirection::Forward);
     fft_.compute(FFTDirection::Forward);
     
+    fftData_t magnitudeSum = 0;
+
     // Compute magnitude value for each frequency bin, i.e. only first half of the FFT results
     for (uint16_t i = 0; i < kFFT_FreqBinCount; i++)
     {
         float magValNew = sqrtf( fftDataReal_[i] * fftDataReal_[i] + fftDataImag_[i] * fftDataImag_[i] );
         
         // Update the averaged spectrum using the current values
-        const float w1 = 16.0f/128.0f;
+        const float w1 = 16.0f / 128.0f;
         const float w2 = 1 - w1;
 
+        // Compute low pass filtered magnitude for each frequency bin
         magnitudeSpectrumAvg_[i] = magValNew * w1 + magnitudeSpectrumAvg_[i] * w2;
+        
+        // Compute overall sum of all (low pass filtered) frequency bins
+        magnitudeSum += magnitudeSpectrumAvg_[i];
     }
 
-    // Compute average magnitude for each frequency band
-    float magnitudeBandAvg[kFreqBandCount] = { 0.0f };
+    // Compute magnitude for each frequency band as maximum over all contained frequency bins
+    float magnitudeBand[kFreqBandCount] = { 0.0f };
+
+    float magnitudeBandWeightedMax = 0.0f;
 
     for (uint8_t bandIdx = 0; bandIdx < kFreqBandCount; bandIdx++)
     {
 
         for (uint16_t binIdx = freqBandBinIdxStart_[bandIdx]; binIdx <= freqBandBinIdxEnd_[bandIdx]; binIdx++)
         {
-            magnitudeBandAvg[bandIdx] += magnitudeSpectrumAvg_[binIdx];
+            // magnitudeBand[bandIdx] += magnitudeSpectrumAvg_[binIdx];
+
+            // Apply maximum norm to the frequency bins of each frequency band
+            if ( magnitudeSpectrumAvg_[binIdx] > magnitudeBand[bandIdx] )
+                magnitudeBand[bandIdx] = magnitudeSpectrumAvg_[binIdx];
         }
 
-        magnitudeBandAvg[bandIdx] *= freqBandNormFactor_[bandIdx];
+        //magnitudeBand[bandIdx] *= freqBandNormFactor_[bandIdx];
+
+        float magnitudeBandWeighted = magnitudeBand[bandIdx] * kFreqBandAmp[bandIdx];
+
+        if ( magnitudeBandWeighted > magnitudeBandWeightedMax )
+        {
+            magnitudeBandWeightedMax = magnitudeBandWeighted;
+        }
+
+        // Update overall maximum of each frequency band
+        if ( magnitudeBand[bandIdx] > magnitudeBandMax_[bandIdx] )
+        {
+            magnitudeBandMax_[bandIdx] = magnitudeBand[bandIdx];
+        }
     }
+
+    // Update the overall sensitivity factor
+    const float s1 = 8.0f / 1024.0f;
+    const float s2 = 1.0f - s1;
+    sensitivityFactor_ =  min( (250.0f / magnitudeBandWeightedMax) * s1 + sensitivityFactor_ * s2, kSensitivityFactorMax );
 
     // Maintain history of last three magnitude values of the bass band
     beatHist_[0] = beatHist_[1];
     beatHist_[1] = beatHist_[2];
-    beatHist_[2] = magnitudeBandAvg[1];
+    beatHist_[2] = magnitudeBand[1] * kFreqBandAmp[1] * sensitivityFactor_;
 
     float diff1 = beatHist_[1] - beatHist_[0];
     float diff2 = beatHist_[2] - beatHist_[1];
-
-    bool beatDetected = false;
 
     // Detect magnitude peak
     if ( ((diff1 >= 0.01) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -0.01)) )
     {
         beatVisIntensity_ = 250;
-        beatDetected = true;
     }
     else {
         if ( beatVisIntensity_ >= 25 )
             beatVisIntensity_ -= 25;
     }
 
-    ledStrip_[0].setHSV(0, 255, beatVisIntensity_);
+    // Show beat detection at the beginning of the strip
+    const uint8_t numBassLeds = ( kNumLeds - (kFreqBandCount-2) ) / 2;
+
+    for (int i = 0; i < numBassLeds; i++)
+    {
+        ledStrip_[i].setHSV( 0, 255, beatVisIntensity_ );
+    }
+
+    // Show frequency intensities on the remaining Leds
+    for (int k = 1; k <= kFreqBandCount-2; k++)
+    {
+        ledStrip_[k+numBassLeds-1].setHSV(  k * 240 / kFreqBandCount, 255, min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255) );
+    }
+
+    // Show beat detection at the beginning of the strip
+    for (int i = numBassLeds + kFreqBandCount-2; i < kNumLeds; i++)
+    {
+        ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+    }
+    
     FastLED.show();
 
-    if ( (diff1 > 0) && (diff2 < 0) )
+    /*
+    if ( (beatHist_[1] >= 0.05) && (diff1 > 0) && (diff2 < 0) )
         Serial.printf("M: %7.4f; D1: %7.4f; D2: %7.4f; %d\n", beatHist_[1], diff1, diff2, beatDetected);
+    */
 
     // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
@@ -555,8 +615,10 @@ void loop() {
 
             for (uint8_t i = 0; i < kFreqBandCount; i++)
             {
-                Serial.printf("to %.0f Hz: %.2f\n", kFreqBandEndHz[i], magnitudeBandAvg[i]);
+                Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
             }
+
+            
         }
         userTrigger_ -= 1;
     }
@@ -565,17 +627,41 @@ void loop() {
     unsigned long timeEndMicros = micros();
     unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
 
-    /*
-    log_d("1: %06.2f  2: %06.2f  3: %06.2f  4: %06.2f  5: %06.2f  6: %06.2f  7: %06.2f  t: %d",
-        magnitudeBandAvg[0],
-        magnitudeBandAvg[1],
-        magnitudeBandAvg[2],
-        magnitudeBandAvg[3],
-        magnitudeBandAvg[4],
-        magnitudeBandAvg[5],
-        magnitudeBandAvg[6],
+    float nf;
+
+    if (fabs(magnitudeBand[1]) < 0.001f)
+    {
+        nf = 1.0f;
+    }
+    else
+    {
+        nf = 1.0f / magnitudeBand[1];
+    }
+
+    log_v("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
+        magnitudeBand[0] * nf,
+        magnitudeBand[1] * nf,
+        magnitudeBand[2] * nf,
+        magnitudeBand[3] * nf,
+        magnitudeBand[4] * nf,
+        magnitudeBand[5] * nf,
+        magnitudeBand[6] * nf,
+        magnitudeBand[7] * nf,
+        magnitudeBand[8] * nf,
+        magnitudeBand[9] * nf,
+        magnitudeBand[10] * nf,
+        magnitudeBand[11] * nf,
+        magnitudeBand[12] * nf,
+        magnitudeBand[13] * nf,
+        magnitudeBand[14] * nf,
+        magnitudeBand[15] * nf,
+        magnitudeBand[16] * nf,
+        magnitudeBand[17] * nf,
+        magnitudeBand[18] * nf,
+        magnitudeBand[19] * nf,
+        magnitudeSum,
+        sensitivityFactor_,
         timeDeltaMicros);
-    */
 
     if (timeDeltaMicros > timeCompMaxMicros_)
     {
