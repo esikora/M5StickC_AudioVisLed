@@ -105,10 +105,10 @@ const float kFreqBandStartHz = 40;
 
 // Index:                                         0      1      2      3      4       5      6     7     8     9    10    11    12    13    14    15    16    17    18      19
 const float kFreqBandEndHz[kFreqBandCount] = {   60,   125,   250,   375,   500,    750,  1000, 1250, 1500, 1750, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000,  20000};
-const float kFreqBandAmp[kFreqBandCount]   = { 0.3f,  0.1f, 0.07f,  0.3f,  0.3f,   0.6f,     1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,   0.3f};
+const float kFreqBandAmp[kFreqBandCount]   = { 0.0f,  0.3f,  0.2f,  0.3f,  0.3f,   0.6f,     1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,   0.0f};
 
 fftData_t sensitivityFactor_ = 1;
-const float kSensitivityFactorMax = 1000.0f;
+const float kSensitivityFactorMax = 5000.0f;
 
 float magnitudeBandMax_[kFreqBandCount] = { 0.0f };
 
@@ -116,7 +116,17 @@ float magnitudeBandMax_[kFreqBandCount] = { 0.0f };
     The indices relate to the frequency bins resulting from the FFT */
 uint16_t freqBandBinIdxStart_[kFreqBandCount] = { 0 };
 uint16_t freqBandBinIdxEnd_[kFreqBandCount] = { 0 };
-float freqBandNormFactor_[kFreqBandCount] = { 0.0f };
+uint16_t freqBandBinCount_[kFreqBandCount] = { 0 };
+
+/* ----- Beat detection constants and variables ----- */
+
+const uint8_t kBeatDetectBand = 1;
+
+const float kBeatThreshold = 4.0f;
+
+float beatHist_[3] = {0.0f};
+
+uint8_t beatVisIntensity_ = 0;
 
 
 bool setupI2Smic()
@@ -135,7 +145,7 @@ bool setupI2Smic()
     i2s_config_t i2sConfig = {
         .mode = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM),
         .sample_rate = kSampleRate,
-        .bits_per_sample = kI2S_BitsPerSample, // is fixed at 12bit, stereo, MSB
+        .bits_per_sample = kI2S_BitsPerSample,
         .channel_format = I2S_CHANNEL_FMT_ONLY_RIGHT,
         .communication_format = I2S_COMM_FORMAT_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
@@ -183,7 +193,6 @@ bool setupSpectrumAnalysis()
     // Variables for bin indices and bin count belonging to the current frequency band
     uint16_t binIdxStart; // Index of the first frequency bin of the current frequency band
     uint16_t binIdxEnd;   // Index of the last frequency bin of the current frequency band
-    int16_t binCount;     // Number of frequency bins within the current frequency band
     
     // Set bin index for the start of the first frequency band
     binIdxStart = ceilf( kFreqBandStartHz / kFFT_FreqStep);
@@ -222,30 +231,16 @@ bool setupSpectrumAnalysis()
             log_e("Failed to set end bin index for frequency band no. %d", bandIdx);
         }
 
-        // Compute normalization factor for current band
-        binCount = binIdxEnd - binIdxStart + 1;
-
-        if (binCount > 0)
-        {
-            freqBandNormFactor_[bandIdx] = 1.0f / binCount;
-        }
-        else
-        {
-            freqBandNormFactor_[bandIdx] = 0.0f;
-
-            success = false;
-
-            log_e("Failed to set normalization factor for frequency band no. %d", bandIdx);
-        }
+        // Compute bin count for current band
+        freqBandBinCount_[bandIdx] = binIdxEnd - binIdxStart + 1;
 
         // Set binIdxStart for next band
         binIdxStart = binIdxEnd + 1;
 
-        log_d("Bins in band %d: %d to %d. Number of bins: %d. Normalization factor: %.3f",
+        log_d("Bins in band %d: %d to %d. Number of bins: %d.",
             bandIdx,
             freqBandBinIdxStart_[bandIdx], freqBandBinIdxEnd_[bandIdx],
-            binCount,
-            freqBandNormFactor_[bandIdx]);
+            freqBandBinCount_[bandIdx]);
     }
 
     return success;
@@ -262,12 +257,12 @@ void setupLedStrip()
 
 void setup() {
     M5.begin();
-    M5.Lcd.setRotation(3);
+    M5.Lcd.setRotation(1);
     M5.Lcd.fillScreen(BLACK);
+
+    M5.Lcd.setTextSize(2);
     M5.Lcd.setTextColor(WHITE, BLUE);
     M5.Lcd.println("Audio Vis");
-
-    M5.Lcd.setTextSize(1);
 
     setupI2Smic();
 
@@ -282,35 +277,9 @@ void setup() {
     delay(1000);
 }
 
-
-uint16_t slotNr_ = 0;
-const uint16_t kSlotCount = 21;
-
-int16_t accumMin_ = INT16_MAX;
-int16_t accumMax_ = INT16_MIN;
-
-int32_t accumAvgSum_ = 0;
-int16_t accumAvgCount_ = 0;
-
 unsigned long timeReadLastMicros_ = 0;
 
-unsigned long timeCompMaxMicros_ = 0;
-
-/*
-const uint16_t kRecChunkCount = 22;
-const uint32_t kRecSampleCount = kFFT_SampleCount * kRecChunkCount;
-
-int16_t recBuf_[kRecSampleCount] = {0};
-uint32_t recBufPos_ = 0;
-
-bool recActive_ = false;
-*/
-
 uint8_t userTrigger_ = 0;
-
-float beatHist_[3] = {0.0f};
-
-uint8_t beatVisIntensity_ = 0;
 
 /*
 uint16_t testSignalFreqFactor_ = 0;
@@ -322,6 +291,7 @@ void loop() {
 
     size_t i2sBytesRead = 0;
 
+    // Store time stamp for debug output
     unsigned long timeBeforeReadMicros = micros();
 
     // Note: If the I2S DMA buffer is empty, 'i2s_read' blocks the current thread until data becomes available
@@ -330,6 +300,7 @@ void loop() {
     // Get timestamp after reading
     unsigned long timeAferReadMicros = micros();
 
+    // Compute read duration for debug output
     unsigned long timeInRead = timeAferReadMicros - timeBeforeReadMicros;
 
     // Compute duration since last read
@@ -338,16 +309,19 @@ void loop() {
     // Store timestamp for next computation
     timeReadLastMicros_ = timeAferReadMicros;
 
+    // Check i2s error state after reading
     if (i2sErr)
     {
         log_e("i2s_read failure. ESP error: %s (%x)", esp_err_to_name(i2sErr), i2sErr);
     }
 
+    // Check whether right number of bytes has been read
     if (i2sBytesRead != kI2S_ReadSizeBytes)
     {
         log_w("i2s_read unexpected number of bytes: %d", i2sBytesRead);
     }
 
+    // Analyse event queue to check whether i2s is working correctly
     i2s_event_t i2sEvent = {};
     uint8_t i2sEventRxDoneCount = 0;
 
@@ -355,8 +329,10 @@ void loop() {
     
     log_v("Number of I2S events waiting in queue: %d", i2sMsgCount);
 
+    // Iterate over all events in the i2s event queue
     for (uint8_t i = 0; i < i2sMsgCount; i++)
     {
+        // Take next event from queue
         if ( xQueueReceive(pI2S_Queue_, (void*) &i2sEvent, 0) == pdTRUE )
         {
             switch (i2sEvent.type)
@@ -369,6 +345,7 @@ void loop() {
                     log_v("I2S_EVENT_TX_DONE");
                     break;
 
+                // Count the number of "RX done" events
                 case I2S_EVENT_RX_DONE:
                     log_v("I2S_EVENT_RX_DONE");
                     i2sEventRxDoneCount += 1;
@@ -381,6 +358,7 @@ void loop() {
         }
     }
 
+    // If there are more RX done events in the queue than expected, probably data processing takes too long
     if (i2sEventRxDoneCount > kI2S_BufferCountPerFFT)
     {
         log_w("Frame loss. Number of I2S_EVENT_RX_DONE events is: %d", i2sEventRxDoneCount);    
@@ -400,24 +378,14 @@ void loop() {
 
     // Compute sum, min and max of the current sample block
     int32_t blockSum = micReadBuffer_[0];
-    int16_t blockMin = micReadBuffer_[0];
-    int16_t blockMax = micReadBuffer_[0];
 
     for (uint16_t i = 1; i < kFFT_SampleCount; i++)
     {
         blockSum += micReadBuffer_[i];
-        blockMin = min(blockMin, micReadBuffer_[i]);
-        blockMax = max(blockMax, micReadBuffer_[i]);
     }
 
     // Compute average value for the current sample block
     int16_t blockAvg = blockSum / kFFT_SampleCount;
-
-    // Compute accumulated values
-    accumAvgSum_ += blockAvg;
-    accumAvgCount_ += 1;
-    accumMin_ = min(accumMin_, blockMin);
-    accumMax_ = max(accumMax_, blockMax);
 
     /*
     // Increment factor for test signal frequency
@@ -460,30 +428,6 @@ void loop() {
         fftDataImag_[i] = 0.0f;
     }
 
-    /*
-    // Copy data into recording buffer
-    if (recActive_)
-    {
-        if ( recBufPos_ < kRecSampleCount )
-        {
-            for (uint16_t i = 0; i < kFFT_SampleCount; i++)
-            {
-                recBuf_[recBufPos_] = micReadBuffer_[i];
-                recBufPos_ += 1;
-            }
-        }
-        else {
-            if (recBufPos_ == kRecSampleCount)
-            {
-                Serial.write( (uint8_t*) recBuf_, kRecSampleCount * 2 );
-                
-                recBufPos_ = 0;
-                recActive_ = false;
-            }
-        }
-    }
-    */
-
     //fft_.windowing(FFTWindow::Hamming, FFTDirection::Forward);
     fft_.compute(FFTDirection::Forward);
     
@@ -512,47 +456,46 @@ void loop() {
 
     for (uint8_t bandIdx = 0; bandIdx < kFreqBandCount; bandIdx++)
     {
-
+        // Interate over all frequency bins assigned to the frequency band
         for (uint16_t binIdx = freqBandBinIdxStart_[bandIdx]; binIdx <= freqBandBinIdxEnd_[bandIdx]; binIdx++)
         {
-            // magnitudeBand[bandIdx] += magnitudeSpectrumAvg_[binIdx];
-
             // Apply maximum norm to the frequency bins of each frequency band
             if ( magnitudeSpectrumAvg_[binIdx] > magnitudeBand[bandIdx] )
                 magnitudeBand[bandIdx] = magnitudeSpectrumAvg_[binIdx];
         }
 
-        //magnitudeBand[bandIdx] *= freqBandNormFactor_[bandIdx];
-
         float magnitudeBandWeighted = magnitudeBand[bandIdx] * kFreqBandAmp[bandIdx];
 
-        if ( magnitudeBandWeighted > magnitudeBandWeightedMax )
-        {
-            magnitudeBandWeightedMax = magnitudeBandWeighted;
-        }
-
-        // Update overall maximum of each frequency band
+        // Compute maximum magnitude value for each frequency band
         if ( magnitudeBand[bandIdx] > magnitudeBandMax_[bandIdx] )
         {
             magnitudeBandMax_[bandIdx] = magnitudeBand[bandIdx];
         }
+
+        // Compute maximum magnitude value across all frequency bands
+        if ( magnitudeBandWeighted > magnitudeBandWeightedMax )
+        {
+            magnitudeBandWeightedMax = magnitudeBandWeighted;
+        }
     }
 
-    // Update the overall sensitivity factor
+    // Update the sensitivity factor
     const float s1 = 8.0f / 1024.0f;
     const float s2 = 1.0f - s1;
     sensitivityFactor_ =  min( (250.0f / magnitudeBandWeightedMax) * s1 + sensitivityFactor_ * s2, kSensitivityFactorMax );
 
+    // ----- Beat detection -----
+
     // Maintain history of last three magnitude values of the bass band
     beatHist_[0] = beatHist_[1];
     beatHist_[1] = beatHist_[2];
-    beatHist_[2] = magnitudeBand[1] * kFreqBandAmp[1] * sensitivityFactor_;
+    beatHist_[2] = magnitudeBand[kBeatDetectBand] * kFreqBandAmp[kBeatDetectBand] * sensitivityFactor_;
 
     float diff1 = beatHist_[1] - beatHist_[0];
     float diff2 = beatHist_[2] - beatHist_[1];
 
     // Detect magnitude peak
-    if ( ((diff1 >= 0.01) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -0.01)) )
+    if ( ((diff1 >= kBeatThreshold) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -kBeatThreshold)) )
     {
         beatVisIntensity_ = 250;
     }
@@ -561,18 +504,27 @@ void loop() {
             beatVisIntensity_ -= 25;
     }
 
+    // ----- Update the Led strip -----
+
     // Show beat detection at the beginning of the strip
     const uint8_t numBassLeds = ( kNumLeds - (kFreqBandCount-2) ) / 2;
 
     for (int i = 0; i < numBassLeds; i++)
     {
-        ledStrip_[i].setHSV( 0, 255, beatVisIntensity_ );
+        ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
     }
 
     // Show frequency intensities on the remaining Leds
+    const uint8_t colorStart = 30;
+    const uint8_t colorEnd   = 210;
+    const uint8_t colorStep  = (colorEnd - colorStart) / (kFreqBandCount - 2);
+
     for (int k = 1; k <= kFreqBandCount-2; k++)
     {
-        ledStrip_[k+numBassLeds-1].setHSV(  k * 240 / kFreqBandCount, 255, min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255) );
+        uint8_t color = colorStart + (k-1) * colorStep;
+        uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
+        
+        ledStrip_[k+numBassLeds-1].setHSV(color, 255, lightness);
     }
 
     // Show beat detection at the beginning of the strip
@@ -583,10 +535,6 @@ void loop() {
     
     FastLED.show();
 
-    /*
-    if ( (beatHist_[1] >= 0.05) && (diff1 > 0) && (diff2 < 0) )
-        Serial.printf("M: %7.4f; D1: %7.4f; D2: %7.4f; %d\n", beatHist_[1], diff1, diff2, beatDetected);
-    */
 
     // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
@@ -596,29 +544,17 @@ void loop() {
         if ( M5.BtnA.isPressed() )
         {
             userTrigger_ = 5;
-
-            /*
-            if ( !recActive_ )
-                recActive_ = true;
-            */
         }
     }
     else {
         if (userTrigger_ == 1)
         {
-            /*
-            for (uint16_t i = 0; i < kFFT_FreqBinCount; i++)
-            {
-                Serial.printf("%.1f Hz: %.2f\n", kFFT_FreqStep * i, magnitudeSpectrumAvg_[i]);
-            }
-            */
-
             for (uint8_t i = 0; i < kFreqBandCount; i++)
             {
                 Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
             }
 
-            
+            Serial.printf("Sensitivity: %.1f\n", sensitivityFactor_);
         }
         userTrigger_ -= 1;
     }
@@ -638,7 +574,7 @@ void loop() {
         nf = 1.0f / magnitudeBand[1];
     }
 
-    log_v("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
+    log_d("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
         magnitudeBand[0] * nf,
         magnitudeBand[1] * nf,
         magnitudeBand[2] * nf,
@@ -662,46 +598,4 @@ void loop() {
         magnitudeSum,
         sensitivityFactor_,
         timeDeltaMicros);
-
-    if (timeDeltaMicros > timeCompMaxMicros_)
-    {
-        timeCompMaxMicros_ = timeDeltaMicros;
-    }
-
-    slotNr_ = (slotNr_ + 1) % kSlotCount;
-
-    if (slotNr_ == 0)
-    {
-        //M5.Lcd.setCursor(0, 10, 4);
-        //M5.Lcd.printf("%08.1f", 0.0);
-
-        /*
-        log_d("Min sample value: %d", accumMin_);
-        log_d("Max sample value: %d", accumMax_);
-        log_d("Average value: %d", accumAvgSum_ / accumAvgCount_);
-        log_d("Maximum duration of processing: %d microseconds.", timeCompMaxMicros_);
-        */
-
-        /*
-        for (uint16_t i = 0; i < kFFT_SampleCount; i+=8)
-        {
-            Serial.printf("%03d: ", i);
-
-            for (uint8_t j = 0; j < 8; j++)
-            {
-                Serial.printf("%6d, ", micReadBuffer_[i+j]);
-            }
-
-            Serial.println();
-        }
-        */
-
-        accumAvgSum_ = 0;
-        accumAvgCount_ = 0;
-
-        accumMin_ = INT16_MAX;
-        accumMax_ = INT16_MIN;
-        
-        timeCompMaxMicros_ = 0;
-    }
 }
