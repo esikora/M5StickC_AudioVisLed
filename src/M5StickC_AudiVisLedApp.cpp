@@ -107,7 +107,7 @@ const float kFreqBandStartHz = 20;
 
 // Index:                                         0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18      19
 const float kFreqBandEndHz[kFreqBandCount] = {   30,   50,   75,  100,  140,  180,  225,  270,  350,  440,  550,  700,  900, 1100, 1400, 1800, 2200, 2800, 3550,  18000};
-const float kFreqBandAmp[kFreqBandCount]   = { 0.2f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f,    1,    1,    1,    1,    1,   0.3f};
+const float kFreqBandAmp[kFreqBandCount]   = { 0.15f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f,    1,    1,    1,    1,    1,   0.3f};
 
 fftData_t sensitivityFactor_ = 1;
 const float kSensitivityFactorMax = 1000.0f;
@@ -253,6 +253,7 @@ void setupLedStrip()
     FastLED.addLeds<NEOPIXEL, kPinLedStrip>(ledStrip_, kNumLeds);
     FastLED.clear();
     FastLED.setBrightness(kLedStripBrightness);
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, 450); // Set maximum power consumption to 5 V and 450 mA
     ledStrip_[0].setHSV(60, 255, 255);
     FastLED.show();
 }
@@ -537,9 +538,12 @@ void loop() {
     
     FastLED.show();
 
-
     // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
+
+    // Compute duration of processing
+    unsigned long timeEndMicros = micros();
+    unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
 
     if (userTrigger_ == 0)
     {
@@ -551,19 +555,19 @@ void loop() {
     else {
         if (userTrigger_ == 1)
         {
+            Serial.printf("AXP192: VBus current: %.3f mA\n", M5.Axp.GetVBusCurrent());
+            Serial.printf("FastLed Brightness: %d %%\n", FastLED.getBrightness());
+            
+            Serial.printf("Processing time: %d\n", timeDeltaMicros);
+            Serial.printf("Sensitivity: %.1f\n", sensitivityFactor_);
+
             for (uint8_t i = 0; i < kFreqBandCount; i++)
             {
                 Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
             }
-
-            Serial.printf("Sensitivity: %.1f\n", sensitivityFactor_);
         }
         userTrigger_ -= 1;
     }
-
-    // Compute duration of processing
-    unsigned long timeEndMicros = micros();
-    unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
 
     float nf;
 
