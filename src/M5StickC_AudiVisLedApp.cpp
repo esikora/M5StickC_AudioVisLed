@@ -95,20 +95,22 @@ CRGB ledStrip_[kNumLeds];
 // Presence:       4000-6000 Hz
 // Brilliance:     6000-20000 Hz
 
+// 20Hz, 25Hz, 31.5Hz, 40Hz, 50Hz, 63Hz, 80Hz, 100Hz, 125Hz 160Hz, 200Hz, 250Hz, 315Hz, 400Hz, 500Hz, 630Hz, 800Hz, 1kHz, 1.25kHz, 1.6kHz, 2kHz, 2.5kHz, 3.15kHz, 4kHz, 5kHz, 6.3kHz, 8kHz, 10kHz, 12.5kHz, 16kHz, 20kHz
+
 //const uint8_t kFreqBandCount = 7;
 //const float kFreqBandStartHz = 20;
 //const float kFreqBandEndHz[kFreqBandCount] = {60, 250, 500, 2000, 4000, 6000, 20000};
 
 const uint8_t kFreqBandCount = 20;
 
-const float kFreqBandStartHz = 40;
+const float kFreqBandStartHz = 20;
 
-// Index:                                         0      1      2      3      4       5      6     7     8     9    10    11    12    13    14    15    16    17    18      19
-const float kFreqBandEndHz[kFreqBandCount] = {   60,   125,   250,   375,   500,    750,  1000, 1250, 1500, 1750, 2000, 2500, 3000, 3500, 4000, 4500, 5000, 5500, 6000,  20000};
-const float kFreqBandAmp[kFreqBandCount]   = { 0.0f,  0.3f,  0.2f,  0.3f,  0.3f,   0.6f,     1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,    1,   0.0f};
+// Index:                                         0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18      19
+const float kFreqBandEndHz[kFreqBandCount] = {   30,   50,   75,  100,  140,  180,  225,  270,  350,  440,  550,  700,  900, 1100, 1400, 1800, 2200, 2800, 3550,  18000};
+const float kFreqBandAmp[kFreqBandCount]   = { 0.2f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f,    1,    1,    1,    1,    1,   0.3f};
 
 fftData_t sensitivityFactor_ = 1;
-const float kSensitivityFactorMax = 5000.0f;
+const float kSensitivityFactorMax = 1000.0f;
 
 float magnitudeBandMax_[kFreqBandCount] = { 0.0f };
 
@@ -120,7 +122,7 @@ uint16_t freqBandBinCount_[kFreqBandCount] = { 0 };
 
 /* ----- Beat detection constants and variables ----- */
 
-const uint8_t kBeatDetectBand = 1;
+const uint8_t kBeatDetectBand = 3;
 
 const float kBeatThreshold = 4.0f;
 
@@ -373,10 +375,10 @@ void loop() {
 
     log_v("Read duration [µs]: %d. Duration since last read [µs]: %d", timeInRead, timeBetweenRead);
 
-    // Store start time of loop() to compute duration later on
+    // Store start time of processing to compute duration later on
     unsigned long timeStartMicros = micros();
 
-    // Compute sum, min and max of the current sample block
+    // Compute sum of the current sample block
     int32_t blockSum = micReadBuffer_[0];
 
     for (uint16_t i = 1; i < kFFT_SampleCount; i++)
@@ -507,7 +509,7 @@ void loop() {
     // ----- Update the Led strip -----
 
     // Show beat detection at the beginning of the strip
-    const uint8_t numBassLeds = ( kNumLeds - (kFreqBandCount-2) ) / 2;
+    const uint8_t numBassLeds = (kNumLeds - kFreqBandCount) / 2;
 
     for (int i = 0; i < numBassLeds; i++)
     {
@@ -517,18 +519,18 @@ void loop() {
     // Show frequency intensities on the remaining Leds
     const uint8_t colorStart = 30;
     const uint8_t colorEnd   = 210;
-    const uint8_t colorStep  = (colorEnd - colorStart) / (kFreqBandCount - 2);
+    const uint8_t colorStep  = (colorEnd - colorStart) / kFreqBandCount;
 
-    for (int k = 1; k <= kFreqBandCount-2; k++)
+    for (int k = 0; k < kFreqBandCount; k++)
     {
-        uint8_t color = colorStart + (k-1) * colorStep;
+        uint8_t color = colorStart + k * colorStep;
         uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
         
-        ledStrip_[k+numBassLeds-1].setHSV(color, 255, lightness);
+        ledStrip_[k+numBassLeds].setHSV(color, 255, lightness);
     }
 
     // Show beat detection at the beginning of the strip
-    for (int i = numBassLeds + kFreqBandCount-2; i < kNumLeds; i++)
+    for (int i = numBassLeds + kFreqBandCount; i < kNumLeds; i++)
     {
         ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
     }
@@ -574,7 +576,7 @@ void loop() {
         nf = 1.0f / magnitudeBand[1];
     }
 
-    log_d("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
+    log_v("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
         magnitudeBand[0] * nf,
         magnitudeBand[1] * nf,
         magnitudeBand[2] * nf,
