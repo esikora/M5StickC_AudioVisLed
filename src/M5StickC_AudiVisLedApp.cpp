@@ -75,7 +75,7 @@ QueueHandle_t pI2S_Queue_ = nullptr;
 
 const uint8_t kPinLedStrip = 32; // M5StickC grove port, yellow cable
 
-const uint8_t kNumLeds = 29;
+const uint8_t kNumLeds = 72;
 
 const uint8_t kLedStripBrightness = 50;
 
@@ -283,6 +283,10 @@ void setup() {
 unsigned long timeReadLastMicros_ = 0;
 
 uint8_t userTrigger_ = 0;
+
+uint8_t cycleNr_ = 0;
+
+float maxCurrent_ = 0.0f;
 
 /*
 uint16_t testSignalFreqFactor_ = 0;
@@ -509,34 +513,97 @@ void loop() {
 
     // ----- Update the Led strip -----
 
-    // Show beat detection at the beginning of the strip
-    const uint8_t numBassLeds = (kNumLeds - kFreqBandCount) / 2;
-
-    for (int i = 0; i < numBassLeds; i++)
+    if (kNumLeds <= 2*kFreqBandCount + 4)
     {
-        ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+        // Show beat detection at the beginning of the strip
+        const uint8_t numBassLeds = (kNumLeds - kFreqBandCount) / 2;
+
+        for (int i = 0; i < numBassLeds; i++)
+        {
+            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+        }
+
+        // Show frequency intensities on the remaining Leds
+        const uint8_t colorStart = 30;
+        const uint8_t colorEnd   = 210;
+        const uint8_t colorStep  = (colorEnd - colorStart) / kFreqBandCount;
+
+        for (int k = 0; k < kFreqBandCount; k++)
+        {
+            uint8_t color = colorStart + k * colorStep;
+            uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
+            
+            ledStrip_[k+numBassLeds].setHSV(color, 255, lightness);
+        }
+
+        // Show beat detection at the beginning of the strip
+        for (int i = numBassLeds + kFreqBandCount; i < kNumLeds; i++)
+        {
+            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+        }
     }
-
-    // Show frequency intensities on the remaining Leds
-    const uint8_t colorStart = 30;
-    const uint8_t colorEnd   = 210;
-    const uint8_t colorStep  = (colorEnd - colorStart) / kFreqBandCount;
-
-    for (int k = 0; k < kFreqBandCount; k++)
+    else
     {
-        uint8_t color = colorStart + k * colorStep;
-        uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
-        
-        ledStrip_[k+numBassLeds].setHSV(color, 255, lightness);
-    }
+        // Show beat detection at the beginning of the strip
+        const uint8_t numBassLeds = (kNumLeds - 2 * kFreqBandCount) / 2;
 
-    // Show beat detection at the beginning of the strip
-    for (int i = numBassLeds + kFreqBandCount; i < kNumLeds; i++)
-    {
-        ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+        for (int i = 0; i < numBassLeds; i++)
+        {
+            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+        }
+
+        // Show frequency intensities on the remaining Leds
+        const uint8_t colorStart = 30;
+        const uint8_t colorEnd   = 210;
+        const uint8_t colorStep  = (colorEnd - colorStart) / kFreqBandCount;
+
+        for (int k = 0; k < kFreqBandCount; k++)
+        {
+            uint8_t color = colorStart + k * colorStep;
+            uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
+            
+            ledStrip_[numBassLeds + k].setHSV(color, 255, lightness);
+
+            ledStrip_[numBassLeds + 2*kFreqBandCount - k - 1].setHSV(color, 255, lightness);
+        }
+
+        // Show beat detection at the beginning of the strip
+        for (int i = numBassLeds + 2*kFreqBandCount; i < kNumLeds; i++)
+        {
+            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+        }
     }
     
     FastLED.show();
+
+    // Determine current consumption from USB
+    float vBusCurrent = M5.Axp.GetVBusCurrent();
+
+    if (vBusCurrent > maxCurrent_)
+    {
+        maxCurrent_ = vBusCurrent;
+    }
+
+    // Determine current consumption from battery
+    float batCurrent = 0.5f * M5.Axp.GetIdischargeData();
+
+    if (batCurrent > maxCurrent_)
+    {
+        maxCurrent_ = batCurrent;
+    }
+
+    // Show current consumption on display
+    if (cycleNr_ == 1)
+    {
+        M5.Lcd.setTextSize(2);
+        M5.Lcd.setTextColor(WHITE, BLACK);
+        int16_t cursorX = M5.Lcd.getCursorX();
+        int16_t cursorY = M5.Lcd.getCursorY();
+        M5.Lcd.printf("%03.0f mA", maxCurrent_);
+        M5.Lcd.setCursor(cursorX, cursorY);
+
+        maxCurrent_ = 0;
+    }
 
     // If user presses ButtonA, print the current frequency spectrum to serial
     M5.BtnA.read();
@@ -604,4 +671,6 @@ void loop() {
         magnitudeSum,
         sensitivityFactor_,
         timeDeltaMicros);
+
+    cycleNr_ = (cycleNr_ + 1) % 20;
 }
