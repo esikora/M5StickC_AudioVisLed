@@ -5,104 +5,73 @@
     from the built-in microphone using i2s. The sampled data is transformed
     into the frequency domain using the arduinoFFT library.
     Copyright (C) 2021 by Ernst Sikora
-    
+
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
-    
+
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
     GNU General Public License for more details.
-    
+
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 */
 
 #include <Arduino.h>
-
-#include <M5StickC.h>
+#include <M5StickCPlus.h>
 #include <driver/i2s.h>
-
 #include <math.h>
-
 #include <FastLED.h>
-
 #include <arduinoFFT.h>
 
 /* ----- General constants ----- */
-
 const uint16_t kSampleRate = 44100; // Unit: Hz
 
 /* ----- FFT constants ----- */
-
 typedef float fftData_t;
-
 const uint8_t kFFT_SampleCountLog2 = 11;
-
 const uint16_t kFFT_SampleCount = 1 << kFFT_SampleCountLog2;
-
 const fftData_t kFFT_SampleCountInv = 1.0f / kFFT_SampleCount;
-
-const fftData_t kFFT_SamplingFreq = (fftData_t) kSampleRate;
-
+const fftData_t kFFT_SamplingFreq = (fftData_t)kSampleRate;
 const uint16_t kFFT_FreqBinCount = kFFT_SampleCount / 2;
-
 const float kFFT_FreqStep = kFFT_SamplingFreq / kFFT_SampleCount;
 
 /* ----- FFT variables ----- */
-
 fftData_t fftDataReal_[kFFT_SampleCount] = {0.0};
-
 fftData_t fftDataImag_[kFFT_SampleCount] = {0.0};
-
 fftData_t magnitudeSpectrumAvg_[kFFT_FreqBinCount] = {0};
-
 ArduinoFFT<fftData_t> fft_ = ArduinoFFT<fftData_t>(fftDataReal_, fftDataImag_, kFFT_SampleCount, kFFT_SamplingFreq); // Create FFT object
 
 /* ----- i2s hardware constants ----- */
-
 const i2s_port_t kI2S_Port = I2S_NUM_0;
-
 const int kI2S_PinClk = 0;
-
 const int kI2S_PinData = 34;
 
 /* ----- i2s constants ----- */
-
 const i2s_bits_per_sample_t kI2S_BitsPerSample = I2S_BITS_PER_SAMPLE_16BIT;
-
 const uint8_t kI2S_BytesPerSample = kI2S_BitsPerSample / 8;
-
 const uint16_t kI2S_ReadSizeBytes = kFFT_SampleCount * kI2S_BytesPerSample;
-
 const uint16_t kI2S_BufferSizeSamples = 1024;
-
 const uint16_t kI2S_BufferSizeBytes = kI2S_BufferSizeSamples * kI2S_BytesPerSample;
-
 const uint16_t kI2S_BufferCount = (3 * kFFT_SampleCount) / (2 * kI2S_BufferSizeSamples);
-
 const uint8_t kI2S_BufferCountPerFFT = kFFT_SampleCount / kI2S_BufferSizeSamples;
-
 const int kI2S_QueueLength = 16;
 
 /* ----- i2s variables ----- */
-
 int16_t micReadBuffer_[kFFT_SampleCount] = {0};
-
 QueueHandle_t pI2S_Queue_ = nullptr;
 
 /* ----- Fastled constants ----- */
-
-const uint8_t kPinLedStrip = 32; // M5StickC grove port, yellow cable
-
-const uint8_t kNumLeds = 72;
-
+const uint8_t kPinLedStrip = 26; // M5StickC grove port, yellow cable
+const uint8_t kNumLeds = 50;     // 150;
 const uint8_t kLedStripBrightness = 50;
+const uint8_t kBassHue = 250;
+const uint32_t kMaxMilliamps = 750;
 
 /* ----- Fastled variables ----- */
-
 // LED strip controller
 CRGB ledStrip_[kNumLeds];
 
@@ -119,39 +88,36 @@ CRGB ledStrip_[kNumLeds];
 
 // 20Hz, 25Hz, 31.5Hz, 40Hz, 50Hz, 63Hz, 80Hz, 100Hz, 125Hz 160Hz, 200Hz, 250Hz, 315Hz, 400Hz, 500Hz, 630Hz, 800Hz, 1kHz, 1.25kHz, 1.6kHz, 2kHz, 2.5kHz, 3.15kHz, 4kHz, 5kHz, 6.3kHz, 8kHz, 10kHz, 12.5kHz, 16kHz, 20kHz
 
-//const uint8_t kFreqBandCount = 7;
-//const float kFreqBandStartHz = 20;
-//const float kFreqBandEndHz[kFreqBandCount] = {60, 250, 500, 2000, 4000, 6000, 20000};
+// const uint8_t kFreqBandCount = 7;
+// const float kFreqBandStartHz = 20;
+// const float kFreqBandEndHz[kFreqBandCount] = {60, 250, 500, 2000, 4000, 6000, 20000};
 
 const uint8_t kFreqBandCount = 20;
-
 const float kFreqBandStartHz = 20;
+const uint8_t numFreqLeds = floor(kNumLeds / 2 / (kFreqBandCount + 2)) * 2;
+const uint8_t numBassLeds = numFreqLeds * 2;
+const uint8_t numExtraLeds = kNumLeds - (kFreqBandCount * numFreqLeds + numBassLeds);
 
-// Index:                                         0     1     2     3     4     5     6     7     8     9    10    11    12    13    14    15    16    17    18      19
-const float kFreqBandEndHz[kFreqBandCount] = {   30,   50,   75,  100,  140,  180,  225,  270,  350,  440,  550,  700,  900, 1100, 1400, 1800, 2200, 2800, 3550,  18000};
-const float kFreqBandAmp[kFreqBandCount]   = { 0.15f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f,    1,    1,    1,    1,    1,   0.3f};
+// Index:                                     0   1   2   3    4    5    6    7    8    9    10   11   12   13    14    15    16    17    18    19
+const float kFreqBandEndHz[kFreqBandCount] = {30, 50, 75, 100, 140, 180, 225, 270, 350, 440, 550, 700, 900, 1100, 1400, 1800, 2200, 2800, 3550, 18000};
+const float kFreqBandAmp[kFreqBandCount] = {0.15f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f, 1, 1, 1, 1, 1, 0.3f};
 
 fftData_t sensitivityFactor_ = 1;
 const float kSensitivityFactorMax = 1000.0f;
 
-float magnitudeBandMax_[kFreqBandCount] = { 0.0f };
+float magnitudeBandMax_[kFreqBandCount] = {0.0f};
 
 /* Start indices, end indices and normalization factors for each frequency band
     The indices relate to the frequency bins resulting from the FFT */
-uint16_t freqBandBinIdxStart_[kFreqBandCount] = { 0 };
-uint16_t freqBandBinIdxEnd_[kFreqBandCount] = { 0 };
-uint16_t freqBandBinCount_[kFreqBandCount] = { 0 };
+uint16_t freqBandBinIdxStart_[kFreqBandCount] = {0};
+uint16_t freqBandBinIdxEnd_[kFreqBandCount] = {0};
+uint16_t freqBandBinCount_[kFreqBandCount] = {0};
 
 /* ----- Beat detection constants and variables ----- */
-
 const uint8_t kBeatDetectBand = 3;
-
 const float kBeatThreshold = 4.0f;
-
 float beatHist_[3] = {0.0f};
-
 uint8_t beatVisIntensity_ = 0;
-
 
 bool setupI2Smic()
 {
@@ -174,8 +140,7 @@ bool setupI2Smic()
         .communication_format = I2S_COMM_FORMAT_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = kI2S_BufferCount,
-        .dma_buf_len = kI2S_BufferSizeSamples
-    };
+        .dma_buf_len = kI2S_BufferSizeSamples};
 
     i2sErr = i2s_driver_install(kI2S_Port, &i2sConfig, kI2S_QueueLength, &pI2S_Queue_);
 
@@ -196,8 +161,7 @@ bool setupI2Smic()
         .bck_io_num = I2S_PIN_NO_CHANGE,
         .ws_io_num = kI2S_PinClk,
         .data_out_num = I2S_PIN_NO_CHANGE,
-        .data_in_num = kI2S_PinData
-    };
+        .data_in_num = kI2S_PinData};
 
     i2sErr = i2s_set_pin(kI2S_Port, &i2sPinConfig);
 
@@ -217,31 +181,31 @@ bool setupSpectrumAnalysis()
     // Variables for bin indices and bin count belonging to the current frequency band
     uint16_t binIdxStart; // Index of the first frequency bin of the current frequency band
     uint16_t binIdxEnd;   // Index of the last frequency bin of the current frequency band
-    
+
     // Set bin index for the start of the first frequency band
-    binIdxStart = ceilf( kFreqBandStartHz / kFFT_FreqStep);
+    binIdxStart = ceilf(kFreqBandStartHz / kFFT_FreqStep);
 
     // Compute values for all frequency bands
     for (uint8_t bandIdx = 0; bandIdx < kFreqBandCount; bandIdx++)
     {
         // Store index of first frequency bin of current band
-        if ( binIdxStart < kFFT_FreqBinCount )
+        if (binIdxStart < kFFT_FreqBinCount)
         {
             freqBandBinIdxStart_[bandIdx] = binIdxStart;
         }
         else
         {
             freqBandBinIdxStart_[bandIdx] = 0;
-            
+
             success = false;
 
             log_e("Failed to set start bin index for frequency band no. %d", bandIdx);
         }
-        
+
         // Compute index of last frequency bin of current band
-        binIdxEnd = ceilf( kFreqBandEndHz[bandIdx] / kFFT_FreqStep ) - 1;
-        
-        if ( binIdxEnd < kFFT_FreqBinCount)
+        binIdxEnd = ceilf(kFreqBandEndHz[bandIdx] / kFFT_FreqStep) - 1;
+
+        if (binIdxEnd < kFFT_FreqBinCount)
         {
             freqBandBinIdxEnd_[bandIdx] = binIdxEnd;
         }
@@ -262,9 +226,9 @@ bool setupSpectrumAnalysis()
         binIdxStart = binIdxEnd + 1;
 
         log_d("Bins in band %d: %d to %d. Number of bins: %d.",
-            bandIdx,
-            freqBandBinIdxStart_[bandIdx], freqBandBinIdxEnd_[bandIdx],
-            freqBandBinCount_[bandIdx]);
+              bandIdx,
+              freqBandBinIdxStart_[bandIdx], freqBandBinIdxEnd_[bandIdx],
+              freqBandBinCount_[bandIdx]);
     }
 
     return success;
@@ -275,19 +239,25 @@ void setupLedStrip()
     FastLED.addLeds<NEOPIXEL, kPinLedStrip>(ledStrip_, kNumLeds);
     FastLED.clear();
     FastLED.setBrightness(kLedStripBrightness);
-    FastLED.setMaxPowerInVoltsAndMilliamps(5, 450); // Set maximum power consumption to 5 V and 450 mA
+    FastLED.setMaxPowerInVoltsAndMilliamps(5, kMaxMilliamps); // Set maximum power consumption to 5 V and 2.5 A
     ledStrip_[0].setHSV(60, 255, 255);
     FastLED.show();
+
+    log_d("Total leds: %i, %i for each band and %i for bass. There are %i extras to be distributed.",
+          kNumLeds, numFreqLeds, numBassLeds, numExtraLeds);
 }
 
-void setup() {
+void setup()
+{
+    log_d("M5.begin!");
     M5.begin();
+
     M5.Lcd.setRotation(1);
     M5.Lcd.fillScreen(BLACK);
 
-    M5.Lcd.setTextSize(2);
+    M5.Lcd.setTextSize(4);
     M5.Lcd.setTextColor(WHITE, BLUE);
-    M5.Lcd.println("Audio Vis");
+    M5.Lcd.println("Audio Vis ");
 
     setupI2Smic();
 
@@ -303,21 +273,18 @@ void setup() {
 }
 
 unsigned long timeReadLastMicros_ = 0;
-
 uint8_t userTrigger_ = 0;
-
-uint8_t cycleNr_ = 0;
-
+uint8_t cycleNr_ = 1;
 float maxCurrent_ = 0.0f;
+uint8_t displayMode = 1;
 
 /*
 uint16_t testSignalFreqFactor_ = 0;
 */
 
-void loop() {
-
+void loop()
+{
     esp_err_t i2sErr = ESP_OK;
-
     size_t i2sBytesRead = 0;
 
     // Store time stamp for debug output
@@ -355,34 +322,34 @@ void loop() {
     uint8_t i2sEventRxDoneCount = 0;
 
     uint8_t i2sMsgCount = uxQueueMessagesWaiting(pI2S_Queue_);
-    
+
     log_v("Number of I2S events waiting in queue: %d", i2sMsgCount);
 
     // Iterate over all events in the i2s event queue
     for (uint8_t i = 0; i < i2sMsgCount; i++)
     {
         // Take next event from queue
-        if ( xQueueReceive(pI2S_Queue_, (void*) &i2sEvent, 0) == pdTRUE )
+        if (xQueueReceive(pI2S_Queue_, (void *)&i2sEvent, 0) == pdTRUE)
         {
             switch (i2sEvent.type)
             {
-                case I2S_EVENT_DMA_ERROR:
-                    log_e("I2S_EVENT_DMA_ERROR");
-                    break;
-                
-                case I2S_EVENT_TX_DONE:
-                    log_v("I2S_EVENT_TX_DONE");
-                    break;
+            case I2S_EVENT_DMA_ERROR:
+                log_e("I2S_EVENT_DMA_ERROR");
+                break;
 
-                // Count the number of "RX done" events
-                case I2S_EVENT_RX_DONE:
-                    log_v("I2S_EVENT_RX_DONE");
-                    i2sEventRxDoneCount += 1;
-                    break;
+            case I2S_EVENT_TX_DONE:
+                log_v("I2S_EVENT_TX_DONE");
+                break;
 
-                case I2S_EVENT_MAX:
-                    log_w("I2S_EVENT_MAX");
-                    break;
+            // Count the number of "RX done" events
+            case I2S_EVENT_RX_DONE:
+                log_v("I2S_EVENT_RX_DONE");
+                i2sEventRxDoneCount += 1;
+                break;
+
+            case I2S_EVENT_MAX:
+                log_w("I2S_EVENT_MAX");
+                break;
             }
         }
     }
@@ -390,13 +357,13 @@ void loop() {
     // If there are more RX done events in the queue than expected, probably data processing takes too long
     if (i2sEventRxDoneCount > kI2S_BufferCountPerFFT)
     {
-        log_w("Frame loss. Number of I2S_EVENT_RX_DONE events is: %d", i2sEventRxDoneCount);    
+        log_w("Frame loss. Number of I2S_EVENT_RX_DONE events is: %d", i2sEventRxDoneCount);
     }
     else
     {
         if (i2sEventRxDoneCount < kI2S_BufferCountPerFFT)
         {
-            log_e("Configuration error? Number of I2S_EVENT_RX_DONE events is: %d", i2sEventRxDoneCount);    
+            log_e("Configuration error? Number of I2S_EVENT_RX_DONE events is: %d", i2sEventRxDoneCount);
         }
     }
 
@@ -448,38 +415,38 @@ void loop() {
         // Generate test signal
         const float k2Pi = 6.2831853f;
         const float k2PiSampleCountInv = k2Pi * kFFT_SampleCountInv;
-        
+
         r = sinf( k2PiSampleCountInv * (testSignalFreqFactor_ * i) );
         */
-        
+
         // Store value in FFT input array
         fftDataReal_[i] = r;
         fftDataImag_[i] = 0.0f;
     }
 
-    //fft_.windowing(FFTWindow::Hamming, FFTDirection::Forward);
+    // fft_.windowing(FFTWindow::Hamming, FFTDirection::Forward);
     fft_.compute(FFTDirection::Forward);
-    
+
     fftData_t magnitudeSum = 0;
 
     // Compute magnitude value for each frequency bin, i.e. only first half of the FFT results
     for (uint16_t i = 0; i < kFFT_FreqBinCount; i++)
     {
-        float magValNew = sqrtf( fftDataReal_[i] * fftDataReal_[i] + fftDataImag_[i] * fftDataImag_[i] );
-        
+        float magValNew = sqrtf(fftDataReal_[i] * fftDataReal_[i] + fftDataImag_[i] * fftDataImag_[i]);
+
         // Update the averaged spectrum using the current values
         const float w1 = 16.0f / 128.0f;
         const float w2 = 1 - w1;
 
         // Compute low pass filtered magnitude for each frequency bin
         magnitudeSpectrumAvg_[i] = magValNew * w1 + magnitudeSpectrumAvg_[i] * w2;
-        
+
         // Compute overall sum of all (low pass filtered) frequency bins
         magnitudeSum += magnitudeSpectrumAvg_[i];
     }
 
     // Compute magnitude for each frequency band as maximum over all contained frequency bins
-    float magnitudeBand[kFreqBandCount] = { 0.0f };
+    float magnitudeBand[kFreqBandCount] = {0.0f};
 
     float magnitudeBandWeightedMax = 0.0f;
 
@@ -489,20 +456,20 @@ void loop() {
         for (uint16_t binIdx = freqBandBinIdxStart_[bandIdx]; binIdx <= freqBandBinIdxEnd_[bandIdx]; binIdx++)
         {
             // Apply maximum norm to the frequency bins of each frequency band
-            if ( magnitudeSpectrumAvg_[binIdx] > magnitudeBand[bandIdx] )
+            if (magnitudeSpectrumAvg_[binIdx] > magnitudeBand[bandIdx])
                 magnitudeBand[bandIdx] = magnitudeSpectrumAvg_[binIdx];
         }
 
         float magnitudeBandWeighted = magnitudeBand[bandIdx] * kFreqBandAmp[bandIdx];
 
         // Compute maximum magnitude value for each frequency band
-        if ( magnitudeBand[bandIdx] > magnitudeBandMax_[bandIdx] )
+        if (magnitudeBand[bandIdx] > magnitudeBandMax_[bandIdx])
         {
             magnitudeBandMax_[bandIdx] = magnitudeBand[bandIdx];
         }
 
         // Compute maximum magnitude value across all frequency bands
-        if ( magnitudeBandWeighted > magnitudeBandWeightedMax )
+        if (magnitudeBandWeighted > magnitudeBandWeightedMax)
         {
             magnitudeBandWeightedMax = magnitudeBandWeighted;
         }
@@ -511,7 +478,7 @@ void loop() {
     // Update the sensitivity factor
     const float s1 = 8.0f / 1024.0f;
     const float s2 = 1.0f - s1;
-    sensitivityFactor_ =  min( (250.0f / magnitudeBandWeightedMax) * s1 + sensitivityFactor_ * s2, kSensitivityFactorMax );
+    sensitivityFactor_ = min((250.0f / magnitudeBandWeightedMax) * s1 + sensitivityFactor_ * s2, kSensitivityFactorMax);
 
     // ----- Beat detection -----
 
@@ -523,79 +490,74 @@ void loop() {
     float diff1 = beatHist_[1] - beatHist_[0];
     float diff2 = beatHist_[2] - beatHist_[1];
 
+    uint8_t beatVisFade = (displayMode == 2) ? 50 : 25; // Makes the lights more punchy, fade quicker.
+
     // Detect magnitude peak
-    if ( ((diff1 >= kBeatThreshold) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -kBeatThreshold)) )
+    if (((diff1 >= kBeatThreshold) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -kBeatThreshold)))
     {
         beatVisIntensity_ = 250;
     }
-    else {
-        if ( beatVisIntensity_ >= 25 )
-            beatVisIntensity_ -= 25;
+    else
+    {
+        if (beatVisIntensity_ >= beatVisFade) // 25 for normal, 50 for punchy
+            beatVisIntensity_ -= beatVisFade;
     }
 
     // ----- Update the Led strip -----
 
-    if (kNumLeds <= 2*kFreqBandCount + 4)
+    int i = 0;
+    // Show beat detection at the beginning of the strip
+    while (i < numBassLeds / 2)
     {
-        // Show beat detection at the beginning of the strip
-        const uint8_t numBassLeds = (kNumLeds - kFreqBandCount) / 2;
+        ledStrip_[i++].setHSV(kBassHue, 255, beatVisIntensity_);
+    }
 
-        for (int i = 0; i < numBassLeds; i++)
+    // Show frequency intensities on the remaining Leds
+    const uint8_t colorStart = 30;
+    const uint8_t colorEnd = 210;
+    const uint8_t colorStep = (colorEnd - colorStart) / kFreqBandCount;
+
+    for (int k = 0; k < kFreqBandCount; k++)
+    {
+        uint8_t color = colorStart + k * colorStep;
+        uint8_t lightness = (displayMode == 2) ? // Keep lights out when not on a beat. Punchy Mode!
+                                min(min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), beatVisIntensity_), 255)
+                                               : min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
+
+        for (int j = 0; j < numFreqLeds / 2; j++)
         {
-            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+            ledStrip_[kNumLeds - i - 1].setHSV(color, 255, lightness);
+            ledStrip_[i++].setHSV(color, 255, lightness);
         }
 
-        // Show frequency intensities on the remaining Leds
-        const uint8_t colorStart = 30;
-        const uint8_t colorEnd   = 210;
-        const uint8_t colorStep  = (colorEnd - colorStart) / kFreqBandCount;
-
-        for (int k = 0; k < kFreqBandCount; k++)
+        // If extra leds are odd, give extra 1 to the last band aka the center band.
+        if (k == kFreqBandCount - 1)
         {
-            uint8_t color = colorStart + k * colorStep;
-            uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
-            
-            ledStrip_[k+numBassLeds].setHSV(color, 255, lightness);
+            if (numExtraLeds % 2 == 1)
+            {
+                ledStrip_[i].setHSV(color, 255, lightness);
+                i++;
+            }
         }
-
-        // Show beat detection at the beginning of the strip
-        for (int i = numBassLeds + kFreqBandCount; i < kNumLeds; i++)
+        else
         {
-            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
+
+            // Add one more to distribute extra leds.
+            if (floor(numExtraLeds / 2) >= kFreqBandCount - k - 1)
+            {
+                ledStrip_[kNumLeds - i - 1].setHSV(color, 255, lightness);
+                ledStrip_[i].setHSV(color, 255, lightness);
+                i++;
+            }
         }
     }
-    else
+
+    // Show beat detection at the end of the strip
+    for (i = kNumLeds - (numBassLeds / 2); i < kNumLeds; i++)
     {
-        // Show beat detection at the beginning of the strip
-        const uint8_t numBassLeds = (kNumLeds - 2 * kFreqBandCount) / 2;
-
-        for (int i = 0; i < numBassLeds; i++)
-        {
-            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
-        }
-
-        // Show frequency intensities on the remaining Leds
-        const uint8_t colorStart = 30;
-        const uint8_t colorEnd   = 210;
-        const uint8_t colorStep  = (colorEnd - colorStart) / kFreqBandCount;
-
-        for (int k = 0; k < kFreqBandCount; k++)
-        {
-            uint8_t color = colorStart + k * colorStep;
-            uint8_t lightness = min( int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
-            
-            ledStrip_[numBassLeds + k].setHSV(color, 255, lightness);
-
-            ledStrip_[numBassLeds + 2*kFreqBandCount - k - 1].setHSV(color, 255, lightness);
-        }
-
-        // Show beat detection at the beginning of the strip
-        for (int i = numBassLeds + 2*kFreqBandCount; i < kNumLeds; i++)
-        {
-            ledStrip_[i].setHSV( 250, 255, beatVisIntensity_ );
-        }
+        ledStrip_[i].setHSV(kBassHue, 255, beatVisIntensity_);
     }
-    
+
     FastLED.show();
 
     // Determine current consumption from USB
@@ -617,13 +579,19 @@ void loop() {
     // Show current consumption on display
     if (cycleNr_ == 1)
     {
-        M5.Lcd.setTextSize(2);
-        M5.Lcd.setTextColor(WHITE, BLACK);
         int16_t cursorX = M5.Lcd.getCursorX();
         int16_t cursorY = M5.Lcd.getCursorY();
-        M5.Lcd.printf("%03.0f mA", maxCurrent_);
-        M5.Lcd.setCursor(cursorX, cursorY);
 
+        M5.Lcd.setTextSize(2);
+        M5.Lcd.setTextColor(WHITE, BLACK);
+        M5.Lcd.printf("%03.0f mA\n", maxCurrent_);
+
+        M5.Lcd.setTextSize(4);
+        M5.Lcd.setTextColor(GREEN, BLACK);
+        M5.Lcd.println("");
+        M5.Lcd.printf("     %i", displayMode);
+
+        M5.Lcd.setCursor(cursorX, cursorY);
         maxCurrent_ = 0;
     }
 
@@ -636,17 +604,18 @@ void loop() {
 
     if (userTrigger_ == 0)
     {
-        if ( M5.BtnA.isPressed() )
+        if (M5.BtnA.isPressed())
         {
             userTrigger_ = 5;
         }
     }
-    else {
+    else
+    {
         if (userTrigger_ == 1)
         {
             Serial.printf("AXP192: VBus current: %.3f mA\n", M5.Axp.GetVBusCurrent());
             Serial.printf("FastLed Brightness: %d %%\n", FastLED.getBrightness());
-            
+
             Serial.printf("Processing time: %d\n", timeDeltaMicros);
             Serial.printf("Sensitivity: %.1f\n", sensitivityFactor_);
 
@@ -654,6 +623,8 @@ void loop() {
             {
                 Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
             }
+            displayMode = displayMode % 2 + 1;
+            Serial.printf("Display Mode: %i", displayMode);
         }
         userTrigger_ -= 1;
     }
@@ -670,29 +641,29 @@ void loop() {
     }
 
     log_v("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
-        magnitudeBand[0] * nf,
-        magnitudeBand[1] * nf,
-        magnitudeBand[2] * nf,
-        magnitudeBand[3] * nf,
-        magnitudeBand[4] * nf,
-        magnitudeBand[5] * nf,
-        magnitudeBand[6] * nf,
-        magnitudeBand[7] * nf,
-        magnitudeBand[8] * nf,
-        magnitudeBand[9] * nf,
-        magnitudeBand[10] * nf,
-        magnitudeBand[11] * nf,
-        magnitudeBand[12] * nf,
-        magnitudeBand[13] * nf,
-        magnitudeBand[14] * nf,
-        magnitudeBand[15] * nf,
-        magnitudeBand[16] * nf,
-        magnitudeBand[17] * nf,
-        magnitudeBand[18] * nf,
-        magnitudeBand[19] * nf,
-        magnitudeSum,
-        sensitivityFactor_,
-        timeDeltaMicros);
+          magnitudeBand[0] * nf,
+          magnitudeBand[1] * nf,
+          magnitudeBand[2] * nf,
+          magnitudeBand[3] * nf,
+          magnitudeBand[4] * nf,
+          magnitudeBand[5] * nf,
+          magnitudeBand[6] * nf,
+          magnitudeBand[7] * nf,
+          magnitudeBand[8] * nf,
+          magnitudeBand[9] * nf,
+          magnitudeBand[10] * nf,
+          magnitudeBand[11] * nf,
+          magnitudeBand[12] * nf,
+          magnitudeBand[13] * nf,
+          magnitudeBand[14] * nf,
+          magnitudeBand[15] * nf,
+          magnitudeBand[16] * nf,
+          magnitudeBand[17] * nf,
+          magnitudeBand[18] * nf,
+          magnitudeBand[19] * nf,
+          magnitudeSum,
+          sensitivityFactor_,
+          timeDeltaMicros);
 
     cycleNr_ = (cycleNr_ + 1) % 20;
 }
