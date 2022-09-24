@@ -66,10 +66,10 @@ QueueHandle_t pI2S_Queue_ = nullptr;
 
 /* ----- Fastled constants ----- */
 const uint8_t kPinLedStrip = 26; // M5StickC grove port, yellow cable
-const uint8_t kNumLeds = 50;     // 150;
-const uint8_t kLedStripBrightness = 50;
+const uint8_t kNumLeds = 150;    // 150;
+const uint8_t kLedStripBrightness = 250;
 const uint8_t kBassHue = 250;
-const uint32_t kMaxMilliamps = 750;
+const uint32_t kMaxMilliamps = 2500;
 
 /* ----- Fastled variables ----- */
 // LED strip controller
@@ -99,7 +99,7 @@ const uint8_t numBassLeds = numFreqLeds * 2;
 const uint8_t numExtraLeds = kNumLeds - (kFreqBandCount * numFreqLeds + numBassLeds);
 
 // Index:                                     0   1   2   3    4    5    6    7    8    9    10   11   12   13    14    15    16    17    18    19
-const float kFreqBandEndHz[kFreqBandCount] = {30, 50, 75, 100, 140, 180, 225, 270, 350, 440, 550, 700, 900, 1100, 1400, 1800, 2200, 2800, 3550, 18000};
+const float kFreqBandEndHz[kFreqBandCount] = {30, 50, 75, 100, 140, 180, 225, 270, 350, 440, 550, 700, 900, 1100, 1400, 1800, 2200, 2500, 3100, 18000};
 const float kFreqBandAmp[kFreqBandCount] = {0.15f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f, 1, 1, 1, 1, 1, 0.3f};
 
 fftData_t sensitivityFactor_ = 1;
@@ -277,6 +277,7 @@ uint8_t userTrigger_ = 0;
 uint8_t cycleNr_ = 1;
 float maxCurrent_ = 0.0f;
 uint8_t displayMode = 1;
+uint8_t ledScrollOffset = 0; // Allows dipslay leds to roll right or left
 
 /*
 uint16_t testSignalFreqFactor_ = 0;
@@ -284,6 +285,15 @@ uint16_t testSignalFreqFactor_ = 0;
 
 void loop()
 {
+    if (displayMode == 3)
+    {
+        ledScrollOffset = (++ledScrollOffset >= kNumLeds) ? 0 : ledScrollOffset;
+    }
+    else
+    {
+        ledScrollOffset = 0;
+    }
+
     esp_err_t i2sErr = ESP_OK;
     size_t i2sBytesRead = 0;
 
@@ -504,30 +514,40 @@ void loop()
     }
 
     // ----- Update the Led strip -----
+    uint8_t i = 0;
+    uint8_t ledIndex = 0;
 
-    int i = 0;
     // Show beat detection at the beginning of the strip
     while (i < numBassLeds / 2)
     {
-        ledStrip_[i++].setHSV(kBassHue, 255, beatVisIntensity_);
+        ledIndex = (i++) + ledScrollOffset;
+        ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+        ledStrip_[ledIndex].setHSV(kBassHue, 255, beatVisIntensity_);
     }
 
     // Show frequency intensities on the remaining Leds
     const uint8_t colorStart = 30;
     const uint8_t colorEnd = 210;
-    const uint8_t colorStep = (colorEnd - colorStart) / kFreqBandCount;
+    const uint8_t colorStep = 3; //(colorEnd - colorStart) / (kNumLeds - numBassLeds * 2) / 2;
+    uint8_t color = colorStart;
 
     for (int k = 0; k < kFreqBandCount; k++)
     {
-        uint8_t color = colorStart + k * colorStep;
         uint8_t lightness = (displayMode == 2) ? // Keep lights out when not on a beat. Punchy Mode!
                                 min(min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), beatVisIntensity_), 255)
                                                : min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
 
         for (int j = 0; j < numFreqLeds / 2; j++)
         {
-            ledStrip_[kNumLeds - i - 1].setHSV(color, 255, lightness);
-            ledStrip_[i++].setHSV(color, 255, lightness);
+            ledIndex = kNumLeds - i - 1 + ledScrollOffset;
+            ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+            ledStrip_[ledIndex].setHSV(color, 255, lightness);
+
+            ledIndex = i++ + ledScrollOffset;
+            ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+            ledStrip_[ledIndex].setHSV(color, 255, lightness);
+
+            color += colorStep;
         }
 
         // If extra leds are odd, give extra 1 to the last band aka the center band.
@@ -535,7 +555,9 @@ void loop()
         {
             if (numExtraLeds % 2 == 1)
             {
-                ledStrip_[i].setHSV(color, 255, lightness);
+                ledIndex = i + ledScrollOffset;
+                ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+                ledStrip_[ledIndex].setHSV(color, 255, lightness);
                 i++;
             }
         }
@@ -545,8 +567,13 @@ void loop()
             // Add one more to distribute extra leds.
             if (floor(numExtraLeds / 2) >= kFreqBandCount - k - 1)
             {
-                ledStrip_[kNumLeds - i - 1].setHSV(color, 255, lightness);
-                ledStrip_[i].setHSV(color, 255, lightness);
+                ledIndex = kNumLeds - i - 1 + ledScrollOffset;
+                ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+                ledStrip_[ledIndex].setHSV(color, 255, lightness);
+
+                ledIndex = i + ledScrollOffset;
+                ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+                ledStrip_[ledIndex].setHSV(color, 255, lightness);
                 i++;
             }
         }
@@ -555,7 +582,9 @@ void loop()
     // Show beat detection at the end of the strip
     for (i = kNumLeds - (numBassLeds / 2); i < kNumLeds; i++)
     {
-        ledStrip_[i].setHSV(kBassHue, 255, beatVisIntensity_);
+        ledIndex = i + ledScrollOffset;
+        ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
+        ledStrip_[ledIndex].setHSV(kBassHue, 255, beatVisIntensity_);
     }
 
     FastLED.show();
@@ -623,7 +652,7 @@ void loop()
             {
                 Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
             }
-            displayMode = displayMode % 2 + 1;
+            displayMode = displayMode % 3 + 1;
             Serial.printf("Display Mode: %i", displayMode);
         }
         userTrigger_ -= 1;
