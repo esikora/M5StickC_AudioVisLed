@@ -285,12 +285,21 @@ uint16_t testSignalFreqFactor_ = 0;
 
 void loop()
 {
-    if (displayMode == 3)
+    switch (displayMode)
     {
+    case 3: // Scroll entire strip to the right
         ledScrollOffset = (++ledScrollOffset >= kNumLeds) ? 0 : ledScrollOffset;
-    }
-    else
-    {
+        break;
+    case 4: // Scroll entire strip to the left
+        ledScrollOffset = (--ledScrollOffset < 0) ? kNumLeds - 1 : ledScrollOffset;
+        break;
+    case 5: // Scroll out from the middle
+        ledScrollOffset = (++ledScrollOffset >= kNumLeds / 2) ? 0 : ledScrollOffset;
+        break;
+    case 6: // Scroll in to the middle
+        ledScrollOffset = (--ledScrollOffset < 0) ? kNumLeds / 2 - 1 : ledScrollOffset;
+        break;
+    default:
         ledScrollOffset = 0;
     }
 
@@ -652,7 +661,7 @@ void loop()
             {
                 Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
             }
-            displayMode = displayMode % 3 + 1;
+            displayMode = displayMode % 6 + 1;
             Serial.printf("Display Mode: %i", displayMode);
         }
         userTrigger_ -= 1;
