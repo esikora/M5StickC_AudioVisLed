@@ -66,7 +66,7 @@ QueueHandle_t pI2S_Queue_ = nullptr;
 
 /* ----- Fastled constants ----- */
 const uint8_t kPinLedStrip = 26; // M5StickC grove port, yellow cable
-const uint8_t kNumLeds = 150;    // 150;
+const uint8_t kNumLeds = 138;    // 150;
 const uint8_t kLedStripBrightness = 250;
 const uint8_t kBassHue = 250;
 const uint32_t kMaxMilliamps = 2500;
