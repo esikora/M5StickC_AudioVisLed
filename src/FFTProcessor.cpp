@@ -1,8 +1,31 @@
-#include "fft.h"
+#include "FFTProcessor.h"
 
-FFTProcessor::FFTProcessor() {}
+FFTProcessor::FFTProcessor()
+{
+    // Constructor
+}
 
-FFTProcessor::~FFTProcessor() {}
+/**
+    M5StickC_AudioVisLedApp:
+    This application has been developed to use an M5StickC device (ESP32)
+    as an audio sampling and visualization device. It samples audio data
+    from the built-in microphone using i2s. The sampled data is transformed
+    into the frequency domain using the arduinoFFT library.
+    Copyright (C) 2021 by Ernst Sikora
+
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
+*/
 
 /* ----- General constants ----- */
 const uint16_t kSampleRate = 44100; // Unit: Hz
@@ -80,9 +103,8 @@ uint16_t freqBandBinCount_[kFreqBandCount] = {0};
 const uint8_t kBeatDetectBand = 3;
 const float kBeatThreshold = 4.0f;
 float beatHist_[3] = {0.0f};
-bool beatHit = false;
-
-unsigned long timeReadLastMicros_ = 0;
+bool isBeatHit = false;
+int lightness[kFreqBandCount];
 
 bool FFTProcessor::setupI2Smic()
 {
@@ -199,8 +221,18 @@ bool FFTProcessor::setupSpectrumAnalysis()
     return success;
 }
 
-void FFTProcessor::I2SLoop()
+unsigned long timeReadLastMicros_ = 0;
+uint8_t userTrigger_ = 0;
+uint8_t cycleNr_ = 1;
+float maxCurrent_ = 0.0f;
+
+/*
+uint16_t testSignalFreqFactor_ = 0;
+*/
+
+void FFTProcessor::loop()
 {
+
     esp_err_t i2sErr = ESP_OK;
     size_t i2sBytesRead = 0;
 
@@ -390,6 +422,8 @@ void FFTProcessor::I2SLoop()
         {
             magnitudeBandWeightedMax = magnitudeBandWeighted;
         }
+
+        lightness[bandIdx] = min(int(magnitudeBandWeighted * sensitivityFactor_), 255);
     }
 
     // Update the sensitivity factor
@@ -408,10 +442,119 @@ void FFTProcessor::I2SLoop()
     float diff2 = beatHist_[2] - beatHist_[1];
 
     // Detect magnitude peak
-    beatHit = (((diff1 >= kBeatThreshold) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -kBeatThreshold)));
+    isBeatHit = (((diff1 >= kBeatThreshold) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -kBeatThreshold)));
+
+    // ----- Update the Led strip -----
+    uint8_t i = 0;
+    uint8_t ledIndex = 0;
+
+    // Determine current consumption from USB
+    float vBusCurrent = M5.Axp.GetVBusCurrent();
+
+    if (vBusCurrent > maxCurrent_)
+    {
+        maxCurrent_ = vBusCurrent;
+    }
+
+    // Determine current consumption from battery
+    float batCurrent = 0.5f * M5.Axp.GetIdischargeData();
+
+    if (batCurrent > maxCurrent_)
+    {
+        maxCurrent_ = batCurrent;
+    }
+
+    // Show current consumption on display
+    if (cycleNr_ == 1)
+    {
+        int16_t cursorX = M5.Lcd.getCursorX();
+        int16_t cursorY = M5.Lcd.getCursorY();
+
+        M5.Lcd.setTextSize(2);
+        M5.Lcd.setTextColor(WHITE, BLACK);
+        M5.Lcd.printf("%03.0f mA\n", maxCurrent_);
+
+        M5.Lcd.setCursor(cursorX, cursorY);
+        maxCurrent_ = 0;
+    }
+
+    // If user presses ButtonA, print the current frequency spectrum to serial
+    M5.BtnA.read();
+
+    // Compute duration of processing
+    unsigned long timeEndMicros = micros();
+    unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
+
+    if (userTrigger_ == 0)
+    {
+        if (M5.BtnA.isPressed())
+        {
+            userTrigger_ = 5;
+        }
+    }
+    else
+    {
+        if (userTrigger_ == 1)
+        {
+            Serial.printf("AXP192: VBus current: %.3f mA\n", M5.Axp.GetVBusCurrent());
+            // Serial.printf("FastLed Brightness: %d %%\n", FastLED.getBrightness());
+
+            Serial.printf("Processing time: %d\n", timeDeltaMicros);
+            Serial.printf("Sensitivity: %.1f\n", sensitivityFactor_);
+
+            for (uint8_t i = 0; i < kFreqBandCount; i++)
+            {
+                Serial.printf("%i: to %.0f Hz: %.2f (Max: %.2f) %i\n", i, kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i], lightness[i]);
+            }
+        }
+        userTrigger_ -= 1;
+    }
+
+    float nf;
+
+    if (fabs(magnitudeBand[1]) < 0.001f)
+    {
+        nf = 1.0f;
+    }
+    else
+    {
+        nf = 1.0f / magnitudeBand[1];
+    }
+
+    log_v("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
+          magnitudeBand[0] * nf,
+          magnitudeBand[1] * nf,
+          magnitudeBand[2] * nf,
+          magnitudeBand[3] * nf,
+          magnitudeBand[4] * nf,
+          magnitudeBand[5] * nf,
+          magnitudeBand[6] * nf,
+          magnitudeBand[7] * nf,
+          magnitudeBand[8] * nf,
+          magnitudeBand[9] * nf,
+          magnitudeBand[10] * nf,
+          magnitudeBand[11] * nf,
+          magnitudeBand[12] * nf,
+          magnitudeBand[13] * nf,
+          magnitudeBand[14] * nf,
+          magnitudeBand[15] * nf,
+          magnitudeBand[16] * nf,
+          magnitudeBand[17] * nf,
+          magnitudeBand[18] * nf,
+          magnitudeBand[19] * nf,
+          magnitudeSum,
+          sensitivityFactor_,
+          timeDeltaMicros);
+
+    cycleNr_ = (cycleNr_ + 1) % 20;
+}
+
+int *FFTProcessor::getLightness()
+{
+    return lightness;
 }
 
 bool FFTProcessor::getBeatHit()
 {
-    return beatHit;
+    return isBeatHit;
 }
