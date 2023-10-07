@@ -1,5 +1,9 @@
 #include "fft.h"
 
+FFTProcessor::FFTProcessor() {}
+
+FFTProcessor::~FFTProcessor() {}
+
 /* ----- General constants ----- */
 const uint16_t kSampleRate = 44100; // Unit: Hz
 
@@ -80,7 +84,7 @@ bool beatHit = false;
 
 unsigned long timeReadLastMicros_ = 0;
 
-bool setupI2Smic()
+bool FFTProcessor::setupI2Smic()
 {
     esp_err_t i2sErr;
 
@@ -135,7 +139,7 @@ bool setupI2Smic()
     return true;
 }
 
-bool setupSpectrumAnalysis()
+bool FFTProcessor::setupSpectrumAnalysis()
 {
     bool success = true;
 
@@ -195,7 +199,7 @@ bool setupSpectrumAnalysis()
     return success;
 }
 
-void I2SLoop()
+void FFTProcessor::I2SLoop()
 {
     esp_err_t i2sErr = ESP_OK;
     size_t i2sBytesRead = 0;
@@ -407,8 +411,7 @@ void I2SLoop()
     beatHit = (((diff1 >= kBeatThreshold) && (diff2 < 0)) || ((diff1 > 0) && (diff2 <= -kBeatThreshold)));
 }
 
-bool getBeatHit()
+bool FFTProcessor::getBeatHit()
 {
     return beatHit;
 }
-

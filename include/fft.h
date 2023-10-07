@@ -6,11 +6,16 @@
 #include <driver/i2s.h>
 #include <math.h>
 
-bool setupI2Smic();
-void I2SLoop();
-bool setupSpectrumAnalysis();
+class FFTProcessor
+{
+public:
+    FFTProcessor();
+    ~FFTProcessor();
 
-bool getBeatHit();
-
+    bool setupI2Smic();
+    void I2SLoop();
+    bool setupSpectrumAnalysis();
+    bool getBeatHit();
+};
 
 #endif

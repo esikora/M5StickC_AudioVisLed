@@ -41,6 +41,9 @@ const uint8_t numFreqLeds = floor(kNumLeds / 2 / (kFreqBandCount + 2)) * 2;
 const uint8_t numBassLeds = numFreqLeds * 2;
 const uint8_t numExtraLeds = kNumLeds - (kFreqBandCount * numFreqLeds + numBassLeds);
 
+typedef float fftData_t;
+FFTProcessor fft;
+
 void setupLedStrip()
 {
     FastLED.addLeds<NEOPIXEL, kPinLedStrip>(ledStrip_, kNumLeds);
@@ -66,9 +69,9 @@ void setup()
     M5.Lcd.setTextColor(WHITE, BLUE);
     M5.Lcd.println("Audio Vis ");
 
-    setupI2Smic();
+    fft.setupI2Smic();
 
-    setupSpectrumAnalysis();
+    fft.setupSpectrumAnalysis();
 
     setupLedStrip();
 
@@ -87,11 +90,13 @@ uint8_t ledScrollOffset = 0; // Allows dipslay leds to roll right or left
 uint8_t beatVisIntensity_ = 0;
 
 // FIXME: These should come from fft.cpp
+// Constant for normalizing int16 input values to floating point range -1.0 to 1.0
+const fftData_t kInt16MaxInv = 1.0f / __INT16_MAX__;
 const uint8_t kFreqBandCount = 20;
 const float kFreqBandAmp[kFreqBandCount] = {0.15f, 0.3f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.2f, 0.3f, 0.4f, 0.4f, 0.4f, 0.5f, 0.8f, 1, 1, 1, 1, 1, 0.3f};
 float magnitudeBand[kFreqBandCount] = {0.0f};
 unsigned long timeStartMicros = micros();
-
+fftData_t sensitivityFactor_ = 1;
 
 /*
 uint16_t testSignalFreqFactor_ = 0;
@@ -99,7 +104,7 @@ uint16_t testSignalFreqFactor_ = 0;
 
 void loop()
 {
-    I2SLoop();
+    fft.I2SLoop();
     switch (displayMode)
     {
     case 3: // Scroll entire strip to the right
@@ -118,7 +123,7 @@ void loop()
         ledScrollOffset = 0;
     }
 
-    if (getBeatHit())
+    if (fft.getBeatHit())
     {
         uint8_t beatVisIntensity_ = 255;
     }
@@ -147,9 +152,7 @@ void loop()
 
     for (int k = 0; k < kFreqBandCount; k++)
     {
-        uint8_t lightness = (displayMode == 2) ? // Keep lights out when not on a beat. Punchy Mode!
-                                min(min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), beatVisIntensity_), 255)
-                                               : min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
+        uint8_t lightness = min(int(magnitudeBand[k] * kFreqBandAmp[k] * sensitivityFactor_), 255);
 
         for (int j = 0; j < numFreqLeds / 2; j++)
         {
@@ -237,76 +240,6 @@ void loop()
         M5.Lcd.setCursor(cursorX, cursorY);
         maxCurrent_ = 0;
     }
-
-    // If user presses ButtonA, print the current frequency spectrum to serial
-    M5.BtnA.read();
-
-    // Compute duration of processing
-    unsigned long timeEndMicros = micros();
-    unsigned long timeDeltaMicros = timeEndMicros - timeStartMicros;
-
-    if (userTrigger_ == 0)
-    {
-        if (M5.BtnA.isPressed())
-        {
-            userTrigger_ = 5;
-        }
-    }
-    else
-    {
-        if (userTrigger_ == 1)
-        {
-            Serial.printf("AXP192: VBus current: %.3f mA\n", M5.Axp.GetVBusCurrent());
-            Serial.printf("FastLed Brightness: %d %%\n", FastLED.getBrightness());
-
-            Serial.printf("Processing time: %d\n", timeDeltaMicros);
-            Serial.printf("Sensitivity: %.1f\n", sensitivityFactor_);
-
-            for (uint8_t i = 0; i < kFreqBandCount; i++)
-            {
-                Serial.printf("to %.0f Hz: %.2f (Max: %.2f)\n", kFreqBandEndHz[i], magnitudeBand[i], magnitudeBandMax_[i]);
-            }
-            displayMode = displayMode % 6 + 1;
-            Serial.printf("Display Mode: %i", displayMode);
-        }
-        userTrigger_ -= 1;
-    }
-
-    float nf;
-
-    if (fabs(magnitudeBand[1]) < 0.001f)
-    {
-        nf = 1.0f;
-    }
-    else
-    {
-        nf = 1.0f / magnitudeBand[1];
-    }
-
-    log_v("0:%04.2f 1:%04.2f 2:%04.2f 3:%04.2f 4:%04.2f 5:%04.2f 6:%04.2f 7:%04.2f 8:%04.2f 9:%04.2f 10:%04.2f 11:%04.2f 12:%04.2f 13:%04.2f 14:%04.2f 15:%04.2f 16:%04.2f 17:%04.2f 18:%04.2f 19:%04.2f Sum:%05.1f Sens: %04.1f t: %d",
-          magnitudeBand[0] * nf,
-          magnitudeBand[1] * nf,
-          magnitudeBand[2] * nf,
-          magnitudeBand[3] * nf,
-          magnitudeBand[4] * nf,
-          magnitudeBand[5] * nf,
-          magnitudeBand[6] * nf,
-          magnitudeBand[7] * nf,
-          magnitudeBand[8] * nf,
-          magnitudeBand[9] * nf,
-          magnitudeBand[10] * nf,
-          magnitudeBand[11] * nf,
-          magnitudeBand[12] * nf,
-          magnitudeBand[13] * nf,
-          magnitudeBand[14] * nf,
-          magnitudeBand[15] * nf,
-          magnitudeBand[16] * nf,
-          magnitudeBand[17] * nf,
-          magnitudeBand[18] * nf,
-          magnitudeBand[19] * nf,
-          magnitudeSum,
-          sensitivityFactor_,
-          timeDeltaMicros);
 
     cycleNr_ = (cycleNr_ + 1) % 20;
 }
