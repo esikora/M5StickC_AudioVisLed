@@ -5,11 +5,15 @@ const uint8_t kFreqBandCount = 20;
 
 /* ----- Fastled constants ----- */
 const uint8_t kPinLedStrip = 26; // M5StickC grove port, yellow cable
-const uint8_t kNumLeds = 10;
+const uint8_t kNumLeds = 21;
 const uint8_t kLedStripBrightness = 50;
 const uint32_t kMaxMilliamps = 250;
-const uint8_t kBassHue = 250;
-uint8_t beatVisIntensity_ = 0;
+const uint8_t colorStart = 75;
+const uint8_t colorEnd = 95;
+const uint8_t colorStep = 2;
+uint8_t kBassHue = 0;
+uint8_t nextColorStart = colorStart;
+int beatVisIntensity_ = 0;
 
 /* ----- Fastled variables ----- */
 // LED strip controller
@@ -45,9 +49,9 @@ void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit)
     // ----- Update the Led strip -----
     uint8_t i = 0;
     uint8_t ledIndex = 0;
-
+    kBassHue = ++kBassHue % 255;
     // Detect magnitude peak
-    beatVisIntensity_ = (isBeatHit) ? 250 : beatVisIntensity_ -= 25;
+    beatVisIntensity_ = max((isBeatHit) ? 250 : beatVisIntensity_ -= 25, 0);
 
     // Show beat detection at the beginning of the strip
     while (i < numBassLeds / 2)
@@ -56,11 +60,7 @@ void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit)
         ledStrip_[ledIndex].setHSV(kBassHue, 255, beatVisIntensity_);
     }
 
-    // Show frequency intensities on the remaining Leds
-    const uint8_t colorStart = 30;
-    const uint8_t colorEnd = 210;
-    const uint8_t colorStep = 3; //(colorEnd - colorStart) / (kNumLeds - numBassLeds * 2) / 2;
-    uint8_t color = colorStart;
+    uint8_t color = nextColorStart;
 
     for (int k = 0; k < kFreqBandCount; k++)
     {
@@ -73,7 +73,7 @@ void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit)
             ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
             ledStrip_[ledIndex].setHSV(color, 255, lightness[k]);
 
-            color += colorStep;
+            color = (color + colorStep > colorEnd) ? colorStart : color + colorStep;
         }
 
         // If extra leds are odd, give extra 1 to the last band aka the center band.
@@ -110,6 +110,8 @@ void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit)
     }
 
     FastLED.show();
+
+    nextColorStart = (++nextColorStart > colorEnd) ? colorStart : nextColorStart;
 
     // If user presses ButtonB, print the current lightness array
     M5.BtnB.read();
