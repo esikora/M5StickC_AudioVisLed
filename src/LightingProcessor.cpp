@@ -5,9 +5,9 @@ const uint8_t kFreqBandCount = 20;
 
 /* ----- Fastled constants ----- */
 const uint8_t kPinLedStrip = 26; // M5StickC grove port, yellow cable
-const uint8_t kNumLeds = 21;
-const uint8_t kLedStripBrightness = 50;
-const uint32_t kMaxMilliamps = 250;
+const uint8_t kNumLeds = 138;
+const uint8_t kLedStripBrightness = 255;
+const uint32_t kMaxMilliamps = 2500;
 const uint8_t colorStart = 75;
 const uint8_t colorEnd = 95;
 const uint8_t colorStep = 2;
