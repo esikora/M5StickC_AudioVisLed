@@ -13,7 +13,7 @@ public:
 
     void setupLedStrip();
     void loop();
-    void updateLedStrip(int lightness[], bool isBeatHit);
+    void updateLedStrip(int lightness[], bool isBeatHit, String modifier);
 };
 
 #endif

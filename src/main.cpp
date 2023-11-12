@@ -24,12 +24,17 @@
 #include <M5StickCPlus.h>
 #include "FFTProcessor.h"
 #include "LightingProcessor.h"
+#include "BluetoothSerial.h"
 
 FFTProcessor fftProcessor;
 LightingProcessor light;
+BluetoothSerial SerialBT;
+String btData;
 
 void setup()
 {
+  btData = "";
+  SerialBT.begin("DJ Lights");
   log_d("M5.begin!");
   M5.begin();
 
@@ -38,7 +43,7 @@ void setup()
 
   M5.Lcd.setTextSize(4);
   M5.Lcd.setTextColor(WHITE, BLUE);
-  M5.Lcd.println("Audio Vis ");
+  M5.Lcd.println("DJ Lights ");
 
   fftProcessor.setupI2Smic();
   fftProcessor.setupSpectrumAnalysis();
@@ -52,6 +57,12 @@ void setup()
 
 void loop()
 {
+  if (SerialBT.available())
+  {
+    btData = SerialBT.readString();
+    btData.trim();
+  }
+
   fftProcessor.loop();
-  light.updateLedStrip(fftProcessor.getLightness(), fftProcessor.getBeatHit());
+  light.updateLedStrip(fftProcessor.getLightness(), fftProcessor.getBeatHit(), btData);
 }

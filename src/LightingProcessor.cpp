@@ -5,23 +5,19 @@ const uint8_t kFreqBandCount = 20;
 
 /* ----- Fastled constants ----- */
 const uint8_t kPinLedStrip = 26; // M5StickC grove port, yellow cable
-const uint8_t kNumLeds = 138;
+const uint8_t kNumLeds = 139;
 const uint8_t kLedStripBrightness = 255;
 const uint32_t kMaxMilliamps = 2500;
-const uint8_t colorStart = 75;
-const uint8_t colorEnd = 95;
-const uint8_t colorStep = 2;
-uint8_t kBassHue = 0;
-uint8_t nextColorStart = colorStart;
-int beatVisIntensity_ = 0;
+uint8_t kBassHue = 250;
+uint8_t beatVisIntensity_ = 0;
 
 /* ----- Fastled variables ----- */
 // LED strip controller
 CRGB ledStrip_[kNumLeds];
 
-const uint8_t numFreqLeds = floor(kNumLeds / 2 / (kFreqBandCount + 2)) * 2;
-const uint8_t numBassLeds = numFreqLeds * 2;
-const uint8_t numExtraLeds = kNumLeds - (kFreqBandCount * numFreqLeds + numBassLeds);
+const uint8_t numFreqLeds = floor(kNumLeds / 2 / (kFreqBandCount + 2));                     // 100 / 2 / 22 = 2
+const uint8_t numBassLeds = floor(kNumLeds / 2) - kFreqBandCount * numFreqLeds;             // 50 - 40 = 10
+const uint8_t numExtraLeds = kNumLeds - ((kFreqBandCount * numFreqLeds + numBassLeds) * 2); // 100 - 100 but could be an odd number.
 
 uint8_t userTriggerB_ = 0;
 
@@ -36,7 +32,7 @@ void LightingProcessor::setupLedStrip()
     FastLED.addLeds<NEOPIXEL, kPinLedStrip>(ledStrip_, kNumLeds);
     FastLED.clear();
     FastLED.setBrightness(kLedStripBrightness);
-    FastLED.setMaxPowerInVoltsAndMilliamps(5, kMaxMilliamps); // Set maximum power consumption to 5 V and 2.5 A
+    FastLED.setMaxPowerInVoltsAndMilliamps(12, kMaxMilliamps); // Set maximum power consumption to 5 V and 2.5 A
     ledStrip_[0].setHSV(60, 255, 255);
     FastLED.show();
 
@@ -44,36 +40,53 @@ void LightingProcessor::setupLedStrip()
                   kNumLeds, numFreqLeds, numBassLeds, numExtraLeds);
 }
 
-void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit)
+void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit, String modifier)
 {
-    // ----- Update the Led strip -----
-    uint8_t i = 0;
+    if (!modifier.isEmpty())
+    {
+        if (modifier.indexOf('-') >= 0)
+        {
+            String key = modifier.substring(0, modifier.indexOf('-'));
+            String value = modifier.substring(modifier.indexOf('-') + 1);
+            uint8_t val_i = value.toInt();
+
+            if (key == "solid")
+            {
+                for (int i = 0; i < kNumLeds; i++)
+                {
+                    ledStrip_[i].setHSV(val_i, 255, 255);
+                }
+                FastLED.show();
+                return;
+            }
+        }
+    }
     uint8_t ledIndex = 0;
-    kBassHue = ++kBassHue % 255;
+    kBassHue++;
+
     // Detect magnitude peak
-    beatVisIntensity_ = max((isBeatHit) ? 250 : beatVisIntensity_ -= 25, 0);
+    beatVisIntensity_ = (isBeatHit) ? 250 : (beatVisIntensity_ > 0) ? beatVisIntensity_ -= 25
+                                                                    : 0;
 
     // Show beat detection at the beginning of the strip
-    while (i < numBassLeds / 2)
+    for (int i = 0; i < numBassLeds; i++)
     {
-        ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-        ledStrip_[ledIndex].setHSV(kBassHue, 255, beatVisIntensity_);
+        ledStrip_[ledIndex++].setHSV(kBassHue, 255, beatVisIntensity_);
     }
 
-    uint8_t color = nextColorStart;
+    // Show frequency intensities on the remaining Leds
+    const uint8_t colorStart = 30;
+    const uint8_t colorEnd = 210;
+    const uint8_t colorStep = 3; //(colorEnd - colorStart) / (kNumLeds - numBassLeds * 2) / 2;
+    uint8_t color = colorStart;
 
+    // First half
     for (int k = 0; k < kFreqBandCount; k++)
     {
-        for (int j = 0; j < numFreqLeds / 2; j++)
+        for (int j = 0; j < numFreqLeds; j++)
         {
-            ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-            ledStrip_[ledIndex].setHSV(color, 255, lightness[k]);
-
-            ledIndex = i++;
-            ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-            ledStrip_[ledIndex].setHSV(color, 255, lightness[k]);
-
-            color = (color + colorStep > colorEnd) ? colorStart : color + colorStep;
+            ledStrip_[ledIndex++].setHSV(color, 255, lightness[k]);
+            color += colorStep;
         }
 
         // If extra leds are odd, give extra 1 to the last band aka the center band.
@@ -81,37 +94,29 @@ void LightingProcessor::updateLedStrip(int lightness[], bool isBeatHit)
         {
             if (numExtraLeds % 2 == 1)
             {
-                ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-                ledStrip_[ledIndex].setHSV(color, 255, lightness[k]);
-                i++;
+                ledStrip_[ledIndex++].setHSV(color, 255, lightness[k]);
+                color += colorStep;
             }
         }
-        else
+    }
+
+    // Second half
+    for (int k = kFreqBandCount - 1; k >= 0; k--)
+    {
+        for (int j = 0; j < numFreqLeds; j++)
         {
-
-            // Add one more to distribute extra leds.
-            if (floor(numExtraLeds / 2) >= kFreqBandCount - k - 1)
-            {
-                ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-                ledStrip_[ledIndex].setHSV(color, 255, lightness[k]);
-
-                ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-                ledStrip_[ledIndex].setHSV(color, 255, lightness[k]);
-                i++;
-            }
+            ledStrip_[ledIndex++].setHSV(color, 255, lightness[k]);
+            color -= colorStep;
         }
     }
 
     // Show beat detection at the end of the strip
-    for (i = kNumLeds - (numBassLeds / 2); i < kNumLeds; i++)
+    for (int i = 0; i < numBassLeds; i++)
     {
-        ledIndex = (ledIndex >= kNumLeds) ? ledIndex - kNumLeds : ledIndex;
-        ledStrip_[ledIndex].setHSV(kBassHue, 255, beatVisIntensity_);
+        ledStrip_[ledIndex++].setHSV(kBassHue, 255, beatVisIntensity_);
     }
 
     FastLED.show();
-
-    nextColorStart = (++nextColorStart > colorEnd) ? colorStart : nextColorStart;
 
     // If user presses ButtonB, print the current lightness array
     M5.BtnB.read();
